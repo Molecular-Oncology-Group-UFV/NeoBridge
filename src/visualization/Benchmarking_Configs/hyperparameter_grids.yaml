@@ -1,0 +1,783 @@
+# configs/hyperparameter_grids.yaml
+# Grids de hiperparámetros mejorados con búsqueda Optuna exhaustiva
+
+common_imbalance_params:
+  scale_pos_weight_range: [4.0, 12.0]  # Para ratio 80/20 ~ 4:1
+
+optimization_settings:
+  n_iter: 50  # Aumentar iteraciones
+  cv_folds: 5
+  scoring: "average_precision"  # Optimizar para AUC-PR
+  random_state: 42
+  timeout_per_model: 600  # 10 minutos por modelo
+  early_stopping_rounds: 10
+
+XGBoost:
+  strategy: "bayesian"
+  param_space:
+    n_estimators:
+      type: int
+      low: 100
+      high: 1000
+      step: 50
+    max_depth:
+      type: int
+      low: 3
+      high: 12
+    learning_rate:
+      type: float
+      low: 0.001
+      high: 0.3
+      log: true
+    min_child_weight:
+      type: int
+      low: 1
+      high: 20
+    gamma:
+      type: float
+      low: 0
+      high: 5
+    subsample:
+      type: float
+      low: 0.5
+      high: 1.0
+    colsample_bytree:
+      type: float
+      low: 0.5
+      high: 1.0
+    colsample_bylevel:
+      type: float
+      low: 0.5
+      high: 1.0
+    reg_alpha:
+      type: float
+      low: 0
+      high: 2
+    reg_lambda:
+      type: float
+      low: 0
+      high: 2
+    scale_pos_weight:
+      type: float
+      low: 4.0
+      high: 12.0
+    grow_policy:
+      type: categorical
+      values: ["depthwise", "lossguide"]
+    max_leaves:
+      type: int
+      low: 0
+      high: 256
+  fixed_params:
+    random_state: 42
+    eval_metric: "logloss"
+    use_label_encoder: false
+    verbosity: 0
+    tree_method: "hist"
+    enable_categorical: false
+
+LightGBM:
+  strategy: "bayesian"
+  param_space:
+    n_estimators:
+      type: int
+      low: 100
+      high: 1000
+    num_leaves:
+      type: int
+      low: 20
+      high: 150
+    max_depth:
+      type: int
+      low: 3
+      high: 12
+    learning_rate:
+      type: float
+      low: 0.001
+      high: 0.3
+      log: true
+    min_child_samples:
+      type: int
+      low: 5
+      high: 100
+    subsample:
+      type: float
+      low: 0.5
+      high: 1.0
+    colsample_bytree:
+      type: float
+      low: 0.5
+      high: 1.0
+    reg_alpha:
+      type: float
+      low: 0
+      high: 2
+    reg_lambda:
+      type: float
+      low: 0
+      high: 2
+    scale_pos_weight:
+      type: float
+      low: 4.0
+      high: 12.0
+    boosting_type:
+      type: categorical
+      values: ["gbdt", "dart", "goss"]
+    min_split_gain:
+      type: float
+      low: 0.0
+      high: 1.0
+  fixed_params:
+    random_state: 42
+    verbosity: -1
+    objective: "binary"
+    metric: "binary_logloss"
+
+CatBoost:
+  strategy: "bayesian"
+  param_space:
+    iterations:
+      type: int
+      low: 100
+      high: 1000
+    depth:
+      type: int
+      low: 3
+      high: 10
+    learning_rate:
+      type: float
+      low: 0.001
+      high: 0.3
+      log: true
+    l2_leaf_reg:
+      type: float
+      low: 1
+      high: 10
+    random_strength:
+      type: float
+      low: 0
+      high: 2
+    bagging_temperature:
+      type: float
+      low: 0
+      high: 1
+    auto_class_weights:
+      type: categorical
+      values: ["None", "Balanced", "SqrtBalanced"]
+    grow_policy:
+      type: categorical
+      values: ["SymmetricTree", "Depthwise", "Lossguide"]
+    min_data_in_leaf:
+      type: int
+      low: 1
+      high: 100
+  fixed_params:
+    random_seed: 42
+    verbose: false
+    loss_function: "Logloss"
+    task_type: "CPU"
+    bootstrap_type: "Bayesian"
+
+RandomForest:
+  strategy: "bayesian"
+  param_space:
+    n_estimators:
+      type: int
+      low: 100
+      high: 1000
+    max_depth:
+      type: int
+      low: 3
+      high: 30
+    min_samples_split:
+      type: int
+      low: 2
+      high: 20
+    min_samples_leaf:
+      type: int
+      low: 1
+      high: 10
+    max_features:
+      type: categorical
+      values: ["sqrt", "log2", 0.3, 0.5, 0.7, 0.9]
+    class_weight:
+      type: categorical
+      values: ["balanced", "balanced_subsample", null]
+    bootstrap:
+      type: categorical
+      values: [true, false]
+    max_samples:
+      type: float
+      low: 0.5
+      high: 1.0
+  fixed_params:
+    random_state: 42
+    n_jobs: 1
+
+ExtraTrees:
+  strategy: "bayesian"
+  param_space:
+    n_estimators:
+      type: int
+      low: 100
+      high: 1000
+    max_depth:
+      type: int
+      low: 3
+      high: 30
+    min_samples_split:
+      type: int
+      low: 2
+      high: 20
+    min_samples_leaf:
+      type: int
+      low: 1
+      high: 10
+    max_features:
+      type: categorical
+      values: ["sqrt", "log2", 0.3, 0.5, 0.7, 0.9, 1.0]
+    class_weight:
+      type: categorical
+      values: ["balanced", "balanced_subsample", null]
+    bootstrap:
+      type: categorical
+      values: [true, false]
+  fixed_params:
+    random_state: 42
+    n_jobs: 1
+
+BalancedRandomForest:
+  strategy: "bayesian"
+  param_space:
+    n_estimators:
+      type: int
+      low: 100
+      high: 500
+    max_depth:
+      type: int
+      low: 3
+      high: 20
+    min_samples_split:
+      type: int
+      low: 2
+      high: 20
+    min_samples_leaf:
+      type: int
+      low: 1
+      high: 10
+    max_features:
+      type: categorical
+      values: ["sqrt", "log2", 0.3, 0.5, 0.7]
+    replacement:
+      type: categorical
+      values: [true, false]
+    sampling_strategy:
+      type: categorical
+      values: ["auto", 0.5, 0.75, 1.0]
+  fixed_params:
+    random_state: 42
+    n_jobs: 1
+
+EasyEnsemble:
+  strategy: "bayesian"
+  param_space:
+    n_estimators:
+      type: int
+      low: 5
+      high: 50
+    max_samples:
+      type: float
+      low: 0.5
+      high: 1.0
+    max_features:
+      type: float
+      low: 0.5
+      high: 1.0
+    bootstrap:
+      type: categorical
+      values: [true, false]
+  fixed_params:
+    random_state: 42
+    n_jobs: 1
+    sampling_strategy: "auto"
+
+RUSBoost:
+  strategy: "bayesian"
+  param_space:
+    n_estimators:
+      type: int
+      low: 50
+      high: 300
+    learning_rate:
+      type: float
+      low: 0.001
+      high: 1.0
+      log: true
+    # algorithm removido - deprecado
+    sampling_strategy:
+      type: categorical
+      values: ["auto", 0.5, 0.75]
+  fixed_params:
+    random_state: 42
+
+GradientBoosting:
+  strategy: "bayesian"
+  param_space:
+    n_estimators:
+      type: int
+      low: 100
+      high: 500
+    learning_rate:
+      type: float
+      low: 0.001
+      high: 0.3
+      log: true
+    max_depth:
+      type: int
+      low: 3
+      high: 10
+    min_samples_split:
+      type: int
+      low: 2
+      high: 20
+    min_samples_leaf:
+      type: int
+      low: 1
+      high: 10
+    subsample:
+      type: float
+      low: 0.5
+      high: 1.0
+    max_features:
+      type: categorical
+      values: ["sqrt", "log2", null]
+    loss:
+      type: categorical
+      values: ["deviance", "exponential"]
+  fixed_params:
+    random_state: 42
+
+HistGradientBoosting:
+  strategy: "bayesian"
+  param_space:
+    max_iter:
+      type: int
+      low: 100
+      high: 500
+    learning_rate:
+      type: float
+      low: 0.001
+      high: 0.3
+      log: true
+    max_depth:
+      type: int
+      low: 3
+      high: 12
+    min_samples_leaf:
+      type: int
+      low: 10
+      high: 100
+    l2_regularization:
+      type: float
+      low: 0
+      high: 10
+    max_bins:
+      type: int
+      low: 64
+      high: 255
+    max_leaf_nodes:
+      type: int
+      low: 15
+      high: 100
+    early_stopping:
+      type: categorical
+      values: [true, false]
+  fixed_params:
+    random_state: 42
+    scoring: "loss"
+
+MLP:
+  strategy: "bayesian"
+  param_space:
+    hidden_layer_sizes_idx:
+      type: categorical
+      values: [0, 1, 2, 3, 4]  # Mapear a: [(50,), (100,), (100,50), (200,100), (200,100,50)]
+    activation:
+      type: categorical
+      values: ["relu", "tanh", "logistic"]
+    alpha:
+      type: float
+      low: 0.00001
+      high: 0.01
+      log: true
+    learning_rate_init:
+      type: float
+      low: 0.0001
+      high: 0.1
+      log: true
+    batch_size:
+      type: categorical
+      values: [32, 64, 128, 256]
+    max_iter:
+      type: int
+      low: 200
+      high: 1000
+    early_stopping:
+      type: categorical
+      values: [true, false]
+    validation_fraction:
+      type: float
+      low: 0.1
+      high: 0.3
+    n_iter_no_change:
+      type: int
+      low: 5
+      high: 20
+    beta_1:
+      type: float
+      low: 0.8
+      high: 0.999
+    beta_2:
+      type: float
+      low: 0.9
+      high: 0.9999
+    epsilon:
+      type: float
+      low: 1e-9
+      high: 1e-6
+      log: true
+  fixed_params:
+    random_state: 42
+    solver: "adam"
+    # NO incluir class_weight aquí - MLP no lo soporta
+
+LogisticRegression:
+  strategy: "bayesian"
+  param_space:
+    C:
+      type: float
+      low: 0.0001
+      high: 100
+      log: true
+    penalty:
+      type: categorical
+      values: ["l2", "l1", "elasticnet"]
+    class_weight:
+      type: categorical
+      values: ["balanced", null]
+    solver:
+      type: categorical
+      values: ["lbfgs", "liblinear", "saga", "newton-cg"]
+    l1_ratio:
+      type: float
+      low: 0
+      high: 1
+    fit_intercept:
+      type: categorical
+      values: [true, false]
+    intercept_scaling:
+      type: float
+      low: 0.1
+      high: 10
+  fixed_params:
+    random_state: 42
+    max_iter: 1000
+    tol: 1e-4
+
+LinearSVC:
+  strategy: "bayesian"
+  param_space:
+    C:
+      type: float
+      low: 0.0001
+      high: 100
+      log: true
+    penalty:
+      type: categorical
+      values: ["l2", "l1"]
+    loss:
+      type: categorical
+      values: ["squared_hinge", "hinge"]
+    class_weight:
+      type: categorical
+      values: ["balanced", null]
+    dual:
+      type: categorical
+      values: [true, false]
+    fit_intercept:
+      type: categorical
+      values: [true, false]
+    intercept_scaling:
+      type: float
+      low: 0.1
+      high: 10
+    multi_class:
+      type: categorical
+      values: ["ovr", "crammer_singer"]
+  fixed_params:
+    random_state: 42
+    max_iter: 5000
+    tol: 1e-4
+
+SVC:
+  strategy: "bayesian"
+  param_space:
+    C:
+      type: float
+      low: 0.0001
+      high: 100
+      log: true
+    kernel:
+      type: categorical
+      values: ["rbf", "poly", "sigmoid"]
+    gamma:
+      type: categorical
+      values: ["scale", "auto", 0.001, 0.01, 0.1, 1]
+    class_weight:
+      type: categorical
+      values: ["balanced", null]
+    degree:
+      type: int
+      low: 2
+      high: 5
+    coef0:
+      type: float
+      low: -1.0
+      high: 1.0
+    shrinking:
+      type: categorical
+      values: [true, false]
+    probability:
+      type: categorical
+      values: [true, false]
+  fixed_params:
+    random_state: 42
+    max_iter: 1000
+
+SGDClassifier:
+  strategy: "bayesian"
+  param_space:
+    loss:
+      type: categorical
+      values: ["hinge", "log_loss", "modified_huber", "squared_hinge", "perceptron"]
+    penalty:
+      type: categorical
+      values: ["l2", "l1", "elasticnet"]
+    alpha:
+      type: float
+      low: 0.00001
+      high: 0.1
+      log: true
+    l1_ratio:
+      type: float
+      low: 0
+      high: 1
+    class_weight:
+      type: categorical
+      values: ["balanced", null]
+    learning_rate:
+      type: categorical
+      values: ["constant", "optimal", "invscaling", "adaptive"]
+    eta0:
+      type: float
+      low: 0.001
+      high: 0.1
+    power_t:
+      type: float
+      low: 0.1
+      high: 0.5
+    early_stopping:
+      type: categorical
+      values: [true, false]
+    validation_fraction:
+      type: float
+      low: 0.1
+      high: 0.3
+    n_iter_no_change:
+      type: int
+      low: 5
+      high: 20
+  fixed_params:
+    random_state: 42
+    max_iter: 1000
+
+RidgeClassifier:
+  strategy: "bayesian"
+  param_space:
+    alpha:
+      type: float
+      low: 0.1
+      high: 100
+      log: true
+    class_weight:
+      type: categorical
+      values: ["balanced", null]
+    solver:
+      type: categorical
+      values: ["auto", "svd", "cholesky", "lsqr", "sparse_cg", "sag", "saga"]
+    fit_intercept:
+      type: categorical
+      values: [true, false]
+    normalize:
+      type: categorical
+      values: [true, false]
+    max_iter:
+      type: int
+      low: 100
+      high: 2000
+  fixed_params:
+    random_state: 42
+
+AdaBoost:
+  strategy: "bayesian"
+  param_space:
+    n_estimators:
+      type: int
+      low: 50
+      high: 500
+    learning_rate:
+      type: float
+      low: 0.001
+      high: 1.0
+      log: true
+    # algorithm removido - deprecado
+  fixed_params:
+    random_state: 42
+    estimator: "DecisionTreeClassifier(max_depth=1)"
+
+Bagging:
+  strategy: "bayesian"
+  param_space:
+    n_estimators:
+      type: int
+      low: 10
+      high: 100
+    max_samples:
+      type: float
+      low: 0.1
+      high: 1.0
+    max_features:
+      type: float
+      low: 0.1
+      high: 1.0
+    bootstrap:
+      type: categorical
+      values: [true, false]
+    bootstrap_features:
+      type: categorical
+      values: [false, true]
+    warm_start:
+      type: categorical
+      values: [true, false]
+  fixed_params:
+    random_state: 42
+    n_jobs: 1
+
+KNeighbors:
+  strategy: "bayesian"
+  param_space:
+    n_neighbors:
+      type: int
+      low: 3
+      high: 50
+    weights:
+      type: categorical
+      values: ["uniform", "distance"]
+    algorithm:
+      type: categorical
+      values: ["auto", "ball_tree", "kd_tree", "brute"]
+    leaf_size:
+      type: int
+      low: 10
+      high: 100
+    p:
+      type: int
+      low: 1
+      high: 5
+    metric:
+      type: categorical
+      values: ["minkowski", "euclidean", "manhattan", "chebyshev"]
+  fixed_params:
+    n_jobs: 1
+
+RadiusNeighbors:
+  strategy: "bayesian"
+  param_space:
+    radius:
+      type: float
+      low: 0.1
+      high: 5.0
+    weights:
+      type: categorical
+      values: ["uniform", "distance"]
+    algorithm:
+      type: categorical
+      values: ["auto", "ball_tree", "kd_tree", "brute"]
+    leaf_size:
+      type: int
+      low: 10
+      high: 100
+    p:
+      type: int
+      low: 1
+      high: 5
+    outlier_label:
+      type: categorical
+      values: ["most_frequent", 0, 1]
+  fixed_params:
+    n_jobs: 1
+
+GaussianNB:
+  strategy: "bayesian"
+  param_space:
+    var_smoothing:
+      type: float
+      low: 1e-12
+      high: 1e-6
+      log: true
+    priors:
+      type: categorical
+      values: [null, [0.8, 0.2], [0.85, 0.15], [0.9, 0.1]]
+  fixed_params:
+    {}
+
+ComplementNB:
+  strategy: "bayesian"
+  param_space:
+    alpha:
+      type: float
+      low: 0.01
+      high: 10.0
+      log: true
+    norm:
+      type: categorical
+      values: [true, false]
+    fit_prior:
+      type: categorical
+      values: [true, false]
+    class_prior:
+      type: categorical
+      values: [null, [0.8, 0.2], [0.85, 0.15], [0.9, 0.1]]
+  fixed_params:
+    {}
+
+# Ensembles dinámicos (se construyen después)
+Voting_Ensemble:
+  strategy: "fixed"
+  fixed_params:
+    voting: "soft"
+    n_jobs: 1
+
+Stacking_Ensemble:
+  strategy: "fixed"
+  fixed_params:
+    passthrough: false
+    n_jobs: 1
+    final_estimator: "LogisticRegression(max_iter=1000)"
+
+# Configuración de ensembles
+ensemble_config:
+  voting_estimators: 3
+  stacking_estimators: 3
+  voting_type: "soft"
+  stacking_final_estimator: "LogisticRegression"

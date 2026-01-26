@@ -1,0 +1,28 @@
+# --- Basura de Python y Jupyter ---
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+
+# --- Configuración del Sistema Operativo e IDEs (Imprescindible) ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Logs y Archivos Temporales ---
+logs/
+tmp/
+catboost_info/
+*.log
+# Importante: El archivo de eventos de Tensorboard que tienes en 'catboost_info'
+*.tfevents* # --- Datos Intermedios o de Prueba (Opcional pero recomendado) ---
+# Si 'Datasets_Prueba' no aporta valor al paper final, ignóralo:
+Datasets_Prueba/
+# Si tienes datos crudos muy pesados que no vas a subir:
+data/raw/
+
+# --- Entornos Virtuales ---
+env/
+venv/
+ENV/

@@ -1,0 +1,155 @@
+# Benchmarking_Configs/parallelization_config.yaml
+# Optimizado para Python 3.10.19 y 36 cores
+
+hardware:
+  total_cores: 8
+  total_memory_gb: 14
+  python_version: "3.10.19"
+  
+  core_allocation:
+    cores_per_model_group: 4  # 36/4 = 9 grupos simultáneos
+    max_models_simultaneous: 2  # Más modelos en paralelo
+
+parallel_strategy:
+  # ESTRATEGIA ÓPTIMA PARA PYTHON 3.10:
+  model_level:
+    backend: "loky"  # El mejor para Python 3.10+
+    prefer: "processes"
+    context: "spawn"  # Obligatorio en macOS y recomendado en Python 3.8+
+    
+  cv_level:
+    backend: "threading"  # Para modelos thread-safe
+    prefer: "threads"
+    n_jobs: 4  # 4 folds en paralelo por modelo
+    
+  optimization_level:
+    n_jobs: 3  # 3 puntos del espacio de búsqueda en paralelo
+    backend: "loky"
+
+execution_groups:
+  # Reorganizado para 9 grupos de 4 cores
+  group_1:  # Tree-based heavy
+    models: ["XGBoost", "LightGBM"]
+    cores: 4
+    memory_gb: 8
+    
+  group_2:  # Tree-based medium
+    models: ["CatBoost", "RandomForest"]
+    cores: 4
+    memory_gb: 8
+    
+  group_3:  # Tree-based light
+    models: ["ExtraTrees", "BalancedRandomForest"]
+    cores: 4
+    memory_gb: 6
+    
+  group_4:  # Gradient boosting
+    models: ["GradientBoosting", "HistGradientBoosting"]
+    cores: 4
+    memory_gb: 6
+    
+  group_5:  # Imbalanced-learn
+    models: ["EasyEnsemble", "RUSBoost", "BalancedBagging"]
+    cores: 4
+    memory_gb: 4
+    
+  group_6:  # Linear models
+    models: ["LogisticRegression", "RidgeClassifier", "SGDClassifier"]
+    cores: 4
+    memory_gb: 4
+    
+  group_7:  # SVM
+    models: ["LinearSVC", "SVC"]
+    cores: 4
+    memory_gb: 6
+    
+  group_8:  # Neural & neighbors
+    models: ["MLP", "KNeighbors", "RadiusNeighbors"]
+    cores: 4
+    memory_gb: 4
+    
+  group_9:  # Bayes & ensembles base
+    models: ["GaussianNB", "ComplementNB", "AdaBoost", "Bagging"]
+    cores: 4
+    memory_gb: 4
+
+# Los ensembles Voting y Stacking se ejecutarán después (dependen de otros modelos)
+
+resource_limits:
+  max_memory_per_process_gb: 12
+  timeout_per_model_minutes: 25  # Reducido para más agilidad
+  max_models_running: 9
+  
+  # Configuración específica por modelo
+  model_specific:
+    XGBoost:
+      nthread: 4
+      tree_method: "hist"  # Más rápido
+    LightGBM:
+      num_threads: 4
+      verbosity: -1
+    CatBoost:
+      thread_count: 4
+      task_type: "CPU"
+    SVC:
+      # SVC no es paralelizable internamente
+    RandomForest:
+      n_jobs: 4
+
+progress_monitoring:
+  show_progress_bar: true
+  progress_style: "rich"  # rich, tqdm, or simple
+  update_interval_seconds: 2
+  show_model_times: true
+  show_cpu_usage: true
+  show_memory_usage: true
+  
+  console_output:
+    level: "INFO"
+    show_warnings: false
+    show_estimator_params: false
+    show_cv_scores: true
+
+logging:
+  log_to_file: true
+  log_file: "logs/benchmark_execution.log"
+  error_file: "logs/benchmark_errors.log"
+  performance_file: "logs/model_performance.csv"
+  
+  log_format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  date_format: "%Y-%m-%d %H:%M:%S"
+
+cache_settings:
+  cache_preprocessed_data: true
+  cache_dir: ".benchmark_cache_310"
+  cache_size_mb: 2048  # 2GB
+  clear_cache_on_start: false
+  use_memory_cache: true
+
+fallback_strategy:
+  on_timeout: "skip_and_log"
+  on_memory_error: "skip_and_log"
+  on_import_error: "skip"
+  max_retries: 1
+  critical_models: ["XGBoost", "LightGBM", "CatBoost", "RandomForest"]
+  
+  timeout_models: ["SVC", "MLP"]  # Modelos propensos a timeout
+
+execution_modes:
+  quick:
+    n_iter: 10
+    cv_folds: 3
+    timeout_minutes: 10
+    skip_slow_models: ["SVC", "MLP", "GradientBoosting"]
+    
+  standard:
+    n_iter: 25
+    cv_folds: 5
+    timeout_minutes: 25
+    skip_slow_models: ["SVC"]
+    
+  full:
+    n_iter: 40
+    cv_folds: 5
+    timeout_minutes: 60
+    skip_slow_models: []

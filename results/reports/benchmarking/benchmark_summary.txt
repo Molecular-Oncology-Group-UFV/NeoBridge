@@ -1,0 +1,26 @@
+================================================================================
+BENCHMARKING RESULTS SUMMARY
+================================================================================
+
+Top 5 Models by AUC-PR:
+----------------------------------------
+3. CatBoost:
+   AUC-PR: 0.7235 | AUC-ROC: 0.8696
+   F2-Score: 0.5381 | Time: 956.2s
+
+7. GradientBoosting:
+   AUC-PR: 0.7206 | AUC-ROC: 0.8645
+   F2-Score: 0.4470 | Time: 1085.1s
+
+8. HistGradientBoosting:
+   AUC-PR: 0.7187 | AUC-ROC: 0.8653
+   F2-Score: 0.5062 | Time: 912.7s
+
+1. XGBoost:
+   AUC-PR: 0.7146 | AUC-ROC: 0.8633
+   F2-Score: 0.6065 | Time: 919.9s
+
+2. LightGBM:
+   AUC-PR: 0.7077 | AUC-ROC: 0.8607
+   F2-Score: 0.5973 | Time: 913.1s
+

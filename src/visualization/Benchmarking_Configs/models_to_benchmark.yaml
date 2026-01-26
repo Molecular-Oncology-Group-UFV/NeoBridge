@@ -1,0 +1,151 @@
+# Benchmarking_Configs/models_to_benchmark.yaml
+# Lista ampliada de modelos - SIN OVERSAMPLING
+
+dataset:
+  path: "data/processed/dataset_80_20_normalized_tcr.csv"
+  target_column: "immunogenicity"
+  test_size: 0.2
+  random_state: 42
+
+models:
+  # ====================== CATEGORÍA A: TREE-BASED (STATE-OF-THE-ART) ======================
+  - name: "XGBoost"
+    class: "xgboost.XGBClassifier"
+    priority: 1
+    imbalance_strategy: "scale_pos_weight"
+
+  - name: "LightGBM"
+    class: "lightgbm.LGBMClassifier"
+    priority: 1
+    imbalance_strategy: "scale_pos_weight"
+
+  - name: "CatBoost"
+    class: "catboost.CatBoostClassifier"
+    priority: 1
+    imbalance_strategy: "auto_class_weights"
+
+  # ====================== CATEGORÍA B: RANDOM FOREST VARIANTS ======================
+  - name: "RandomForest"
+    class: "sklearn.ensemble.RandomForestClassifier"
+    priority: 2
+    imbalance_strategy: "class_weight"
+
+  - name: "ExtraTrees"
+    class: "sklearn.ensemble.ExtraTreesClassifier"
+    priority: 2
+    imbalance_strategy: "class_weight"
+
+  - name: "BalancedRandomForest"
+    class: "imblearn.ensemble.BalancedRandomForestClassifier"
+    priority: 1
+    imbalance_strategy: "undersampling"
+
+  # ====================== CATEGORÍA C: GRADIENT BOOSTING VARIANTS ======================
+  - name: "GradientBoosting"
+    class: "sklearn.ensemble.GradientBoostingClassifier"
+    priority: 2
+    imbalance_strategy: "none"
+
+  - name: "HistGradientBoosting"
+    class: "sklearn.ensemble.HistGradientBoostingClassifier"
+    priority: 2
+    imbalance_strategy: "none"
+
+  # ====================== CATEGORÍA D: IMBALANCED-LEARN ENSEMBLES (UNDERSAMPLING) ======================
+  - name: "EasyEnsemble"
+    class: "imblearn.ensemble.EasyEnsembleClassifier"
+    priority: 2
+    imbalance_strategy: "undersampling"
+
+  - name: "RUSBoost"
+    class: "imblearn.ensemble.RUSBoostClassifier"
+    priority: 2
+    imbalance_strategy: "undersampling"
+
+  - name: "BalancedBagging"
+    class: "imblearn.ensemble.BalancedBaggingClassifier"
+    priority: 3
+    imbalance_strategy: "undersampling"
+
+  # ====================== CATEGORÍA E: LINEAR MODELS ======================
+  - name: "LogisticRegression"
+    class: "sklearn.linear_model.LogisticRegression"
+    priority: 2
+    imbalance_strategy: "class_weight"
+
+  - name: "RidgeClassifier"
+    class: "sklearn.linear_model.RidgeClassifier"
+    priority: 3
+    imbalance_strategy: "class_weight"
+
+  - name: "SGDClassifier"
+    class: "sklearn.linear_model.SGDClassifier"
+    priority: 3
+    imbalance_strategy: "class_weight"
+
+  # ====================== CATEGORÍA F: SUPPORT VECTOR MACHINES ======================
+  - name: "LinearSVC"
+    class: "sklearn.svm.LinearSVC"
+    priority: 3
+    imbalance_strategy: "class_weight"
+
+  - name: "SVC"
+    class: "sklearn.svm.SVC"
+    priority: 3
+    imbalance_strategy: "class_weight"
+
+  # ====================== CATEGORÍA G: NEURAL NETWORKS ======================
+  - name: "MLP"
+    class: "sklearn.neural_network.MLPClassifier"
+    priority: 2
+
+  # ====================== CATEGORÍA H: BAYESIAN MODELS ======================
+  - name: "GaussianNB"
+    class: "sklearn.naive_bayes.GaussianNB"
+    priority: 3
+    imbalance_strategy: "none"
+
+  # ====================== CATEGORÍA I: NEIGHBOR-BASED ======================
+  - name: "KNeighbors"
+    class: "sklearn.neighbors.KNeighborsClassifier"
+    priority: 3
+    imbalance_strategy: "weights_distance"
+
+  - name: "RadiusNeighbors"
+    class: "sklearn.neighbors.RadiusNeighborsClassifier"
+    priority: 3
+    imbalance_strategy: "weights_distance"
+
+  # ====================== CATEGORÍA J: ENSEMBLES (LOS 3 TIPOS) ======================
+  - name: "Voting_Ensemble"
+    class: "sklearn.ensemble.VotingClassifier"
+    priority: 2
+    imbalance_strategy: "class_weight"
+    ensemble_type: "voting"
+
+  - name: "Stacking_Ensemble"
+    class: "sklearn.ensemble.StackingClassifier"
+    priority: 2
+    imbalance_strategy: "class_weight"
+    ensemble_type: "stacking"
+
+  - name: "AdaBoost"
+    class: "sklearn.ensemble.AdaBoostClassifier"
+    priority: 2
+    imbalance_strategy: "algorithm_samme"
+
+  - name: "Bagging"
+    class: "sklearn.ensemble.BaggingClassifier"
+    priority: 3
+    imbalance_strategy: "none"
+
+# Total: 23 modelos
+
+evaluation:
+  metrics:
+    primary: "average_precision"
+    secondary: ["roc_auc", "f1", "f2", "precision", "recall", "balanced_accuracy"]
+  cv_folds: 5
+  n_iter_optimization: 30
+  test_size: 0.2
+  scoring: "average_precision"
