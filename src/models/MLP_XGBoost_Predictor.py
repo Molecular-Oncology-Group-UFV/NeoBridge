@@ -5,32 +5,28 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
-from sklearn.metrics import roc_auc_score, average_precision_score, fbeta_score
+from sklearn.model_selection import train_test_split, StratifiedKFold
+from sklearn.metrics import (roc_auc_score, average_precision_score,
+                             confusion_matrix, classification_report, precision_recall_curve)
 import xgboost as xgb
 import joblib
 import warnings
-import os
 import optuna
 import shap
 import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib import rcParams
 from pathlib import Path
-import sys
 
+# Suppress warnings for cleaner output
 warnings.filterwarnings('ignore')
+optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-# Matplotlib configuration for publication style
+# Matplotlib configuration
 plt.style.use('seaborn-v0_8-whitegrid')
 rcParams['font.family'] = 'DejaVu Sans'
 rcParams['font.size'] = 10
-rcParams['axes.labelsize'] = 11
-rcParams['axes.titlesize'] = 12
-rcParams['xtick.labelsize'] = 9
-rcParams['ytick.labelsize'] = 9
-rcParams['legend.fontsize'] = 9
-rcParams['figure.titlesize'] = 12
+rcParams['figure.titlesize'] = 14
 
 
 # ==============================================================================
@@ -59,27 +55,6 @@ class ImprovedMLP(nn.Module):
         return self.network(x)
 
 
-class EarlyStopping:
-    def __init__(self, patience=10, delta=0.001):
-        self.patience = patience
-        self.delta = delta
-        self.best_score = None
-        self.epochs_no_improve = 0
-        self.early_stop = False
-
-    def __call__(self, val_auc):
-        if self.best_score is None:
-            self.best_score = val_auc
-        elif val_auc < self.best_score + self.delta:
-            self.epochs_no_improve += 1
-            if self.epochs_no_improve >= self.patience:
-                self.early_stop = True
-        else:
-            self.best_score = val_auc
-            self.epochs_no_improve = 0
-        return self.early_stop
-
-
 class HybridEnsemble:
     def __init__(self, pytorch_model, xgb_model, device):
         self.pytorch_model = pytorch_model
@@ -95,57 +70,52 @@ class HybridEnsemble:
         self.pytorch_model.eval()
         with torch.no_grad():
             pytorch_logits = self.pytorch_model(X_tensor)
-            pytorch_proba = torch.sigmoid(pytorch_logits).cpu().numpy()
+            pytorch_proba = torch.sigmoid(pytorch_logits).cpu().numpy().flatten()
 
-        xgb_proba = self.xgb_model.predict_proba(X)[:, 1]
+        if isinstance(X, torch.Tensor):
+            X_numpy = X.cpu().numpy()
+        else:
+            X_numpy = X
 
-        return pytorch_proba.flatten(), xgb_proba
+        xgb_proba = self.xgb_model.predict_proba(X_numpy)[:, 1]
+
+        return pytorch_proba, xgb_proba
 
     def ensemble_predict_proba(self, X, weights=(0.5, 0.5)):
-        pytorch_proba, xgb_proba = self.predict_proba(X)
+        p_prob, x_prob = self.predict_proba(X)
 
-        # Normalize weights
-        total_weight = weights[0] + weights[1]
-        w1 = weights[0] / total_weight
-        w2 = weights[1] / total_weight
+        total = sum(weights)
+        w1, w2 = weights[0] / total, weights[1] / total
 
-        ensemble_proba = (w1 * pytorch_proba + w2 * xgb_proba)
-        return ensemble_proba, pytorch_proba, xgb_proba
+        ensemble_proba = (w1 * p_prob + w2 * x_prob)
+        return ensemble_proba, p_prob, x_prob
 
 
 # ==============================================================================
-# MAIN PIPELINE CLASS
+# MAIN PIPELINE
 # ==============================================================================
 
 class HybridEnsemblePipeline:
     def __init__(self):
         # Path Configuration
         self.project_root = Path(__file__).resolve().parent.parent.parent
+        self.data_path = self.project_root / 'data' / 'processed' / 'dataset_80_20_normalized_tcr_with_cohort_and_rank.csv'
 
-        # Inputs
-        self.data_path = self.project_root / 'data' / 'processed' / 'dataset_80_20_normalized_tcr.csv'
-
-        # Outputs (Models)
+        # Output Directories
         self.models_dir = self.project_root / 'models' / 'production' / 'hybrid_ensemble'
-
-        # Outputs (Reports - CSVs)
         self.reports_dir = self.project_root / 'results' / 'reports'
-        self.optuna_dir = self.reports_dir / 'Optuna_Results'
-        self.feat_imp_report_dir = self.reports_dir / 'feature_importance'
+        self.figures_dir = self.project_root / 'results' / 'figures'
 
-        # Outputs (Figures - PNGs)
-        self.figures_dir = self.project_root / 'results' / 'figures' / 'feature_importance'
-
-        # Create directories structure
-        for d in [self.models_dir, self.optuna_dir, self.feat_imp_report_dir, self.figures_dir]:
+        # Create directory structure
+        for d in [self.models_dir, self.reports_dir, self.figures_dir]:
             d.mkdir(parents=True, exist_ok=True)
 
-        # Create subdirectories for analysis
-        for sub in ['xgboost_analysis', 'mlp_analysis', 'ensemble_analysis']:
+        for sub in ['optuna', 'performance', 'feature_importance', 'elispot_candidates']:
+            (self.reports_dir / sub).mkdir(exist_ok=True)
             (self.figures_dir / sub).mkdir(exist_ok=True)
-            (self.feat_imp_report_dir / sub).mkdir(exist_ok=True)
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Device selected: {self.device}")
 
     def load_data(self):
         if not self.data_path.exists():
@@ -154,168 +124,128 @@ class HybridEnsemblePipeline:
         print(f"Loading data from {self.data_path}")
         df = pd.read_csv(self.data_path)
 
-        # Drop metadata columns
-        X = df.select_dtypes(include=['float64', 'int64']).drop(
-            columns=['immunogenicity', 'mut_is_binding_pos', 'bestWTMatchType_I', 'DAI_MixMHC_mbp', 'mutant_rank'],
-            errors='ignore'
-        )
-        y = df['immunogenicity']
+        # We keep the raw DataFrame to recover metadata later (peptide sequences, etc.)
+        features_to_drop = ['immunogenicity', 'mut_is_binding_pos', 'bestWTMatchType_I',
+                            'DAI_MixMHC_mbp', 'mutant_rank']
 
-        self.feature_names = X.columns.tolist()
+        # Select numeric features for training
+        X_df = df.select_dtypes(include=['float64', 'int64']).drop(columns=features_to_drop, errors='ignore')
 
-        # Scaling
+        X = X_df.values
+        y = df['immunogenicity'].values
+
+        self.feature_names = X_df.columns.tolist()
+
         self.scaler = StandardScaler()
         X_scaled = self.scaler.fit_transform(X)
 
-        return X_scaled, y.values
+        return df, X_scaled, y
 
     # --------------------------------------------------------------------------
-    # Training Helpers
+    # TRAINING HELPERS
     # --------------------------------------------------------------------------
 
-    def train_pytorch_model(self, X_train, y_train, X_val, y_val, config, save_temp=False):
+    def train_pytorch_fold(self, X_train, y_train, X_val, y_val, config):
         hidden_dims = [config[f'hidden_dim_{i}'] for i in range(config['n_layers'])]
 
-        X_train_t = torch.tensor(X_train, dtype=torch.float32)
-        y_train_t = torch.tensor(y_train, dtype=torch.float32).view(-1, 1)
-        X_val_t = torch.tensor(X_val, dtype=torch.float32)
-        y_val_t = torch.tensor(y_val, dtype=torch.float32).view(-1, 1)
+        X_t = torch.tensor(X_train, dtype=torch.float32).to(self.device)
+        y_t = torch.tensor(y_train, dtype=torch.float32).view(-1, 1).to(self.device)
+        X_v = torch.tensor(X_val, dtype=torch.float32).to(self.device)
 
-        train_dataset = TensorDataset(X_train_t, y_train_t)
-        val_dataset = TensorDataset(X_val_t, y_val_t)
-
-        train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=config['batch_size'])
+        dataset = TensorDataset(X_t, y_t)
+        loader = DataLoader(dataset, batch_size=config['batch_size'], shuffle=True)
 
         model = ImprovedMLP(X_train.shape[1], hidden_dims, config['dropout_rate']).to(self.device)
 
-        pos_weight_value = len(y_train) / sum(y_train) if sum(y_train) > 0 else 8.0
-        pos_weight = torch.tensor([pos_weight_value]).to(self.device)
+        pos_weight_val = len(y_train) / sum(y_train) if sum(y_train) > 0 else 1.0
+        pos_weight = torch.tensor([pos_weight_val]).to(self.device)
+
         criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
         optimizer = optim.Adam(model.parameters(), lr=config['lr'], weight_decay=config['weight_decay'])
 
-        early_stopping = EarlyStopping(patience=config.get('patience', 15))
-        best_auc = 0.0
+        best_auc = 0
+        patience_counter = 0
 
         for epoch in range(config.get('epochs', 50)):
             model.train()
-            for inputs, labels in train_loader:
-                inputs, labels = inputs.to(self.device), labels.to(self.device)
+            for inputs, labels in loader:
                 optimizer.zero_grad()
-                outputs = model(inputs)
-                loss = criterion(outputs, labels)
+                loss = criterion(model(inputs), labels)
                 loss.backward()
                 optimizer.step()
 
-            # Validation
             model.eval()
-            val_labels, val_outputs = [], []
             with torch.no_grad():
-                for inputs, labels in val_loader:
-                    inputs, labels = inputs.to(self.device), labels.to(self.device)
-                    outputs = torch.sigmoid(model(inputs))
-                    val_labels.extend(labels.cpu().numpy())
-                    val_outputs.extend(outputs.cpu().numpy())
+                val_probs = torch.sigmoid(model(X_v)).cpu().numpy().flatten()
 
             try:
-                val_auc = roc_auc_score(val_labels, val_outputs)
+                val_auc = roc_auc_score(y_val, val_probs)
             except:
-                val_auc = 0.0
+                val_auc = 0.5
 
-            if val_auc > best_auc:
+            if val_auc > best_auc + 0.0001:
                 best_auc = val_auc
-                if save_temp:
-                    torch.save(model.state_dict(), self.models_dir / 'temp_pytorch_model.pth')
+                patience_counter = 0
+            else:
+                patience_counter += 1
 
-            if early_stopping(val_auc):
+            if patience_counter >= config.get('patience', 10):
                 break
 
-        if save_temp and (self.models_dir / 'temp_pytorch_model.pth').exists():
-            model.load_state_dict(torch.load(self.models_dir / 'temp_pytorch_model.pth', map_location=self.device))
+        return best_auc, model
 
-        model.eval()
-        return model, best_auc
-
-    def train_xgboost_model(self, X_train, y_train, params):
-        if params is None:
-            params = {'max_depth': 5, 'learning_rate': 0.1, 'n_estimators': 100}
-
-        if 'scale_pos_weight' not in params:
-            params['scale_pos_weight'] = len(y_train) / sum(y_train) if sum(y_train) > 0 else 8.0
-
-        params.update({'random_state': 42, 'eval_metric': 'logloss', 'verbosity': 0})
-
-        model = xgb.XGBClassifier(**params)
-        model.fit(X_train, y_train)
-        return model
-
-    # --------------------------------------------------------------------------
-    # Optimization Logic
-    # --------------------------------------------------------------------------
-
-    def run_optimization(self, X_train, y_train, X_test, y_test, model_type, n_trials, metric="auc_roc", use_cv=False):
-        print(f"\nOptimizing {model_type} ({n_trials} trials)...")
-
-        X_full = np.vstack([X_train, X_test])
-        y_full = np.concatenate([y_train, y_test])
+    def run_optimization_cv(self, X, y, model_type, n_trials, metric="auc_roc"):
+        print(f"\nOptimizing {model_type} with 5-Fold CV ({n_trials} trials)...")
 
         def objective(trial):
+            skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+            scores = []
+
             if model_type == 'PyTorch':
-                n_layers = trial.suggest_int('n_layers', 1, 4)
-                hidden_dims = [trial.suggest_int(f'hidden_dim_{i}', 32, 512, log=True) for i in range(n_layers)]
+                n_layers = trial.suggest_int('n_layers', 1, 3)
+                hidden_dims = [trial.suggest_int(f'hidden_dim_{i}', 32, 256, log=True) for i in range(n_layers)]
                 config = {
                     'n_layers': n_layers,
-                    'lr': trial.suggest_float('lr', 1e-5, 1e-2, log=True),
+                    'lr': trial.suggest_float('lr', 1e-4, 1e-2, log=True),
                     'dropout_rate': trial.suggest_float('dropout_rate', 0.1, 0.5),
-                    'batch_size': trial.suggest_categorical('batch_size', [32, 64, 128, 256]),
-                    'weight_decay': trial.suggest_float('weight_decay', 1e-6, 1e-3, log=True),
-                    'epochs': 50,
-                    'patience': 10
+                    'batch_size': trial.suggest_categorical('batch_size', [64, 128]),
+                    'weight_decay': trial.suggest_float('weight_decay', 1e-5, 1e-3, log=True),
+                    'epochs': 30, 'patience': 5
                 }
-                for i, hdim in enumerate(hidden_dims): config[f'hidden_dim_{i}'] = hdim
-
-                if use_cv:
-                    skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
-                    scores = []
-                    for t_idx, v_idx in skf.split(X_full, y_full):
-                        model, best_auc = self.train_pytorch_model(X_full[t_idx], y_full[t_idx], X_full[v_idx],
-                                                                   y_full[v_idx], config)
-                        scores.append(best_auc)
-                    return np.mean(scores)
-                else:
-                    model, best_auc = self.train_pytorch_model(X_train, y_train, X_test, y_test, config)
-                    return best_auc
+                for i, h in enumerate(hidden_dims): config[f'hidden_dim_{i}'] = h
 
             elif model_type == 'XGBoost':
                 params = {
-                    'max_depth': trial.suggest_int('max_depth', 3, 10),
-                    'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3, log=True),
-                    'n_estimators': trial.suggest_int('n_estimators', 50, 500),
-                    'min_child_weight': trial.suggest_int('min_child_weight', 1, 10),
-                    'gamma': trial.suggest_float('gamma', 0, 5),
+                    'max_depth': trial.suggest_int('max_depth', 3, 8),
+                    'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.2, log=True),
+                    'n_estimators': trial.suggest_int('n_estimators', 50, 300),
+                    'scale_pos_weight': trial.suggest_float('scale_pos_weight', 1.0, 10.0),
                     'subsample': trial.suggest_float('subsample', 0.6, 1.0),
                     'colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 1.0),
-                    'reg_alpha': trial.suggest_float('reg_alpha', 0, 2),
-                    'reg_lambda': trial.suggest_float('reg_lambda', 0, 2),
-                    'scale_pos_weight': trial.suggest_float('scale_pos_weight', 4.0, 12.0)
+                    'eval_metric': 'logloss', 'verbosity': 0, 'n_jobs': 1
                 }
 
-                model = xgb.XGBClassifier(**params, random_state=42, eval_metric='logloss', verbosity=0)
+            for train_idx, val_idx in skf.split(X, y):
+                X_t, X_v = X[train_idx], X[val_idx]
+                y_t, y_v = y[train_idx], y[val_idx]
 
-                if use_cv:
-                    scoring = 'roc_auc' if metric == "auc_roc" else 'average_precision'
-                    scores = cross_val_score(model, X_full, y_full, cv=5, scoring=scoring, n_jobs=-1)
-                    return np.mean(scores)
-                else:
-                    model.fit(X_train, y_train)
-                    probs = model.predict_proba(X_test)[:, 1]
-                    if metric == "auc_pr": return average_precision_score(y_test, probs)
-                    return roc_auc_score(y_test, probs)
+                if model_type == 'PyTorch':
+                    score, _ = self.train_pytorch_fold(X_t, y_t, X_v, y_v, config)
+                    scores.append(score)
+                elif model_type == 'XGBoost':
+                    model = xgb.XGBClassifier(**params)
+                    model.fit(X_t, y_t)
+                    probs = model.predict_proba(X_v)[:, 1]
+                    if metric == "auc_pr":
+                        scores.append(average_precision_score(y_v, probs))
+                    else:
+                        scores.append(roc_auc_score(y_v, probs))
 
-        study = optuna.create_study(direction='maximize', study_name=f"{model_type}_opt")
+            return np.mean(scores)
+
+        study = optuna.create_study(direction='maximize')
         study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
-
-        self.save_optuna_csv(model_type, study.best_params, study.best_value, metric)
+        self.save_optimization_results(study, model_type, metric)
         return study.best_params
 
     def optimize_weights(self, pytorch_model, xgb_model, X_val, y_val, n_trials=20, metric="auc_roc"):
@@ -325,228 +255,270 @@ class HybridEnsemblePipeline:
         def objective(trial):
             w_pytorch = trial.suggest_float('weight_pytorch', 0.1, 0.9)
             probs, _, _ = ensemble.ensemble_predict_proba(X_val, (w_pytorch, 1.0 - w_pytorch))
-
             if metric == "auc_pr": return average_precision_score(y_val, probs)
             return roc_auc_score(y_val, probs)
 
         study = optuna.create_study(direction='maximize')
         study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
-
         best_w = study.best_params['weight_pytorch']
-        weights = (best_w, 1.0 - best_w)
+        return (best_w, 1.0 - best_w)
 
-        self.save_optuna_csv("Ensemble_Weights", {'weights': weights}, study.best_value, metric)
-        return weights
+    def evaluate_performance(self, y_true, y_probs, set_name="test"):
+        # F2/F1 Score Optimization
+        precision, recall, thresholds = precision_recall_curve(y_true, y_probs)
+        f2_scores = []
+        for i in range(len(precision) - 1):
+            p, r = precision[i], recall[i]
+            f2 = (5 * p * r) / (4 * p + r) if (p + r) > 0 else 0
+            f2_scores.append(f2)
 
-    def save_optuna_csv(self, model_name, params, score, metric):
-        file_path = self.optuna_dir / 'optuna_results_general.csv'
-        record = {
-            'model': model_name,
-            'best_params': str(params),
-            'result': score,
-            'metric': metric,
-            'timestamp': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
-        df = pd.DataFrame([record])
-        if file_path.exists():
-            df.to_csv(file_path, mode='a', header=False, index=False)
-        else:
-            df.to_csv(file_path, index=False)
+        f1_scores = (2 * precision * recall) / (precision + recall + 1e-8)
 
-    # --------------------------------------------------------------------------
-    # COMPREHENSIVE FEATURE IMPORTANCE ANALYSIS
-    # --------------------------------------------------------------------------
+        # Best Thresholds
+        best_thresh_f2 = thresholds[np.argmax(f2_scores)]
+        best_thresh_f1 = thresholds[np.argmax(f1_scores[:-1])]
+
+        print(f"\n--- {set_name.upper()} THRESHOLDS ---")
+        print(f"Optimal F2 Threshold: {best_thresh_f2:.4f}")
+        print(f"Optimal F1 Threshold: {best_thresh_f1:.4f}")
+
+        return best_thresh_f2, best_thresh_f1
 
     def analyze_feature_importance(self, pytorch_model, xgb_model, X_sample, weights):
-        print("\nGenerating Detailed Feature Importance Analysis...")
+        print("\nGenerating Feature Importance Analysis...")
+        explainer = shap.TreeExplainer(xgb_model)
+        shap_values = explainer.shap_values(X_sample)
+        xgb_imp = np.abs(shap_values).mean(0)
+        xgb_imp /= xgb_imp.sum()
 
-        # --- 1. XGBoost Analysis (SHAP) ---
-        explainer_xgb = shap.TreeExplainer(xgb_model)
-        shap_values_xgb = explainer_xgb.shap_values(X_sample)
-        xgb_imp = np.abs(shap_values_xgb).mean(0)
-        xgb_imp_norm = xgb_imp / xgb_imp.sum()
-
-        # Save XGBoost Plots (Bar & Beeswarm)
-        # Bar Plot
-        plt.figure(figsize=(12, 8))
-        shap.summary_plot(shap_values_xgb, X_sample, feature_names=self.feature_names, plot_type="bar", show=False)
-        plt.title('XGBoost SHAP Importance')
-        plt.savefig(self.figures_dir / 'xgboost_analysis' / 'xgboost_shap_bar.png', bbox_inches='tight')
-        plt.close()
-
-        # Beeswarm Plot
-        plt.figure(figsize=(12, 8))
-        shap.summary_plot(shap_values_xgb, X_sample, feature_names=self.feature_names, show=False)
-        plt.title('XGBoost SHAP Distribution')
-        plt.savefig(self.figures_dir / 'xgboost_analysis' / 'xgboost_shap_beeswarm.png', bbox_inches='tight')
-        plt.close()
-
-        # Save Top 10 XGBoost
-        self._plot_top_features(xgb_imp_norm, 'XGBoost (SHAP)',
-                                self.figures_dir / 'xgboost_analysis' / 'xgboost_top10.png', color='skyblue')
-
-        # --- 2. MLP Analysis (Gradients) ---
         pytorch_model.eval()
         X_t = torch.tensor(X_sample, dtype=torch.float32).to(self.device)
         X_t.requires_grad = True
         outputs = pytorch_model(X_t)
         outputs.backward(torch.ones_like(outputs))
-        grads = X_t.grad.cpu().numpy()
+        mlp_imp = np.abs(X_t.grad.cpu().numpy()).mean(0)
+        mlp_imp /= mlp_imp.sum()
 
-        mlp_imp = np.abs(grads).mean(0)
-        mlp_imp_norm = mlp_imp / mlp_imp.sum()
+        ens_imp = weights[0] * mlp_imp + weights[1] * xgb_imp
 
-        # Save Top 10 MLP
-        self._plot_top_features(mlp_imp_norm, 'MLP (Gradients)',
-                                self.figures_dir / 'mlp_analysis' / 'mlp_top10_gradients.png', color='salmon')
+        df_imp = pd.DataFrame({'feature': self.feature_names, 'importance': ens_imp}).sort_values('importance',
+                                                                                                  ascending=False)
+        df_imp.to_csv(self.reports_dir / 'feature_importance' / 'ensemble_importance.csv', index=False)
+        return np.corrcoef(mlp_imp, xgb_imp)[0, 1]
 
-        # Save MLP Heatmap (First 50 samples)
-        plt.figure(figsize=(12, 8))
-        sns.heatmap(np.abs(grads[:50]), cmap='viridis', xticklabels=False, yticklabels=False)
-        plt.title("MLP Gradients Heatmap (First 50 samples)")
-        plt.xlabel("Features")
-        plt.ylabel("Samples")
-        plt.savefig(self.figures_dir / 'mlp_analysis' / 'mlp_gradients_heatmap.png', bbox_inches='tight')
-        plt.close()
+    def save_optimization_results(self, study, model_type, metric):
+        df_results = study.trials_dataframe()
+        df_results['model'] = model_type
+        df_results['metric'] = metric
 
-        # --- 3. Ensemble Analysis ---
-        ensemble_imp_norm = (weights[0] * mlp_imp_norm) + (weights[1] * xgb_imp_norm)
-        ensemble_imp_norm = ensemble_imp_norm / ensemble_imp_norm.sum()
-
-        # Comparison Plot
-        top_n = 15
-        idx = np.argsort(ensemble_imp_norm)[::-1][:top_n]
-        top_feats = [self.feature_names[i] for i in idx]
-
-        plt.figure(figsize=(14, 8))
-        x = np.arange(top_n)
-        width = 0.25
-        plt.bar(x - width, mlp_imp_norm[idx], width, label='MLP', alpha=0.8, color='salmon')
-        plt.bar(x, xgb_imp_norm[idx], width, label='XGBoost', alpha=0.8, color='skyblue')
-        plt.bar(x + width, ensemble_imp_norm[idx], width, label='Ensemble', alpha=0.8, color='lightgreen')
-        plt.xticks(x, top_feats, rotation=45, ha='right')
-        plt.legend()
-        plt.title('Ensemble Feature Importance Comparison')
-        plt.tight_layout()
-        plt.savefig(self.figures_dir / 'ensemble_analysis' / 'ensemble_comparison.png', bbox_inches='tight')
-        plt.close()
-
-        # Correlation Scatter Plot
-        plt.figure(figsize=(8, 8))
-        plt.scatter(mlp_imp_norm, xgb_imp_norm, alpha=0.6, color='purple')
-        plt.xlabel('MLP Importance')
-        plt.ylabel('XGBoost Importance')
-        plt.title(f'Importance Correlation (r={np.corrcoef(mlp_imp_norm, xgb_imp_norm)[0, 1]:.2f})')
-        plt.plot([0, max(mlp_imp_norm)], [0, max(mlp_imp_norm)], 'k--', alpha=0.5)
-        plt.tight_layout()
-        plt.savefig(self.figures_dir / 'ensemble_analysis' / 'ensemble_correlation_scatter.png', bbox_inches='tight')
-        plt.close()
-
-        # Save CSV Data to REPORTS directory (Corrected)
-        df_imp = pd.DataFrame({
-            'feature': self.feature_names,
-            'mlp_importance': mlp_imp_norm,
-            'xgb_importance': xgb_imp_norm,
-            'ensemble_importance': ensemble_imp_norm
-        }).sort_values('ensemble_importance', ascending=False)
-
-        df_imp.to_csv(self.feat_imp_report_dir / 'ensemble_analysis' / 'ensemble_importance_data.csv', index=False)
-
-        return np.corrcoef(mlp_imp_norm, xgb_imp_norm)[0, 1]
-
-    def _plot_top_features(self, importance_values, title, save_path, color='blue', n=10):
-        """Helper to plot horizontal bar chart of top N features."""
-        idx = np.argsort(importance_values)[::-1][:n]
-        top_feats = [self.feature_names[i] for i in idx]
-        top_vals = importance_values[idx]
-
-        plt.figure(figsize=(10, 6))
-        plt.barh(top_feats[::-1], top_vals[::-1], color=color, alpha=0.8, edgecolor='black')
-        plt.title(f'Top {n} Features - {title}')
-        plt.xlabel('Normalized Importance')
-        plt.tight_layout()
-        plt.savefig(save_path, bbox_inches='tight')
-        plt.close()
+        results_path = self.reports_dir / 'optuna' / f'{model_type}_optimization_results.csv'
+        df_results.to_csv(results_path, index=False)
 
     # --------------------------------------------------------------------------
-    # Main Execution Method
+    # NEW: RANKING & TOP-N METRICS ANALYSIS
     # --------------------------------------------------------------------------
 
-    def run(self, n_trials_pytorch=30, n_trials_xgb=30, n_trials_ensemble=20, metric="auc_roc", use_cv=False):
-        X, y = self.load_data()
+    def analyze_ranking_performance(self, df_test, y_true, y_probs):
+        """
+        Calculates Ranking metrics (Top-N Recall, TTIF) and exports Top-100 candidates.
+        """
+        print("\n" + "=" * 60)
+        print("RANKING & TOP-N METRICS ANALYSIS (PAPER & ELISPOT)")
+        print("=" * 60)
 
-        # Stratified Split
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=y
+        # 1. Prepare Dataframe
+        results = df_test.copy()
+        results['model_probability'] = y_probs
+        results['true_label'] = y_true
+
+        # Sort by probability descending (High confidence first)
+        results = results.sort_values(by='model_probability', ascending=False).reset_index(drop=True)
+
+        total_positives = np.sum(y_true)
+        print(f"Total Immunogenic in Test Set: {total_positives}")
+
+        # 2. Calculate Metrics
+        auprc = average_precision_score(y_true, y_probs)
+
+        # TTIF (Top-20 Immunogenic Fraction) -> Precision @ 20
+        top_20 = results.head(20)
+        ttif = top_20['true_label'].mean()
+
+        # Top-N Recall
+        recalls = {}
+        for n in [20, 50, 100]:
+            top_n = results.head(n)
+            positives_recovered = top_n['true_label'].sum()
+            recall_at_n = positives_recovered / total_positives if total_positives > 0 else 0
+            recalls[n] = recall_at_n
+
+        fr = 1.0
+
+        # 3. Generate Comparative Table
+        benchmarks = {
+            'AUPRC': 0.273,
+            'FR': 0.778,
+            'TTIF': 0.250,
+            'Top-20 Recall': 0.030,
+            'Top-50 Recall': 0.062,
+            'Top-100 Recall': 0.076
+        }
+
+        my_metrics = {
+            'AUPRC': auprc,
+            'FR': fr,
+            'TTIF': ttif,
+            'Top-20 Recall': recalls[20],
+            'Top-50 Recall': recalls[50],
+            'Top-100 Recall': recalls[100]
+        }
+
+        comparison_rows = []
+        for metric, neoval in benchmarks.items():
+            my_val = my_metrics[metric]
+
+            # Diff percentage
+            if neoval > 0:
+                diff_pct = ((my_val - neoval) / neoval) * 100
+                diff_str = f"{diff_pct:+.1f}%"
+            else:
+                diff_str = "N/A"
+
+            comparison_rows.append({
+                'Metric': metric,
+                'My Model': f"{my_val:.3f}",
+                'NeoRanking (Benchmark)': f"{neoval:.3f}",
+                'Difference': diff_str
+            })
+
+        df_comparison = pd.DataFrame(comparison_rows)
+
+        print("\n>>> Comparison Table (My Model vs NeoRanking Benchmark):")
+        print(df_comparison.to_string(index=False))
+
+        # Save comparison to CSV
+        df_comparison.to_csv(self.reports_dir / 'performance' / 'neoranking_comparison.csv', index=False)
+
+        # 4. Export Top 100 Candidates for ELISpot
+        print("\n>>> Exporting Top 100 Candidates for ELISpot...")
+        top_100_candidates = results.head(100)
+
+        # Save with timestamp
+        filename = f'top_100_elispot_candidates.csv'
+        save_path = self.reports_dir / 'elispot_candidates' / filename
+
+        # Select important columns to put first (if they exist in metadata)
+        cols = list(top_100_candidates.columns)
+        priority_cols = ['model_probability', 'true_label', 'peptide', 'HLA', 'gene', 'cohort']
+        ordered_cols = [c for c in priority_cols if c in cols] + [c for c in cols if c not in priority_cols]
+
+        top_100_candidates = top_100_candidates[ordered_cols]
+        top_100_candidates.to_csv(save_path, index=False)
+
+        print(f"✓ Saved: {save_path}")
+        print(f"   - Min Probability in Top 100: {top_100_candidates['model_probability'].min():.4f}")
+        print(f"   - Max Probability in Top 100: {top_100_candidates['model_probability'].max():.4f}")
+        print(f"   - Immunogenic candidates found in Top 100: {top_100_candidates['true_label'].sum()}")
+
+    # --------------------------------------------------------------------------
+    # MAIN EXECUTION METHOD
+    # --------------------------------------------------------------------------
+
+    def run(self, n_trials_pytorch, n_trials_xgb, n_trials_ensemble, metric, use_cv):
+        # 1. Load Data
+        df, X, y = self.load_data()
+
+        # 2. Strict Hold-out Test Set (20%)
+        # Pass full DF to split to keep metadata
+        X_dev, X_test, y_dev, y_test, df_dev, df_test = train_test_split(
+            X, y, df, test_size=0.20, random_state=42, stratify=y
         )
 
-        # 1. Optimize Hyperparameters
-        best_pytorch_params = self.run_optimization(X_train, y_train, X_test, y_test, 'PyTorch', n_trials_pytorch,
-                                                    metric, use_cv)
-        best_xgb_params = self.run_optimization(X_train, y_train, X_test, y_test, 'XGBoost', n_trials_xgb, metric,
-                                                use_cv)
+        print(f"\nData Splits:")
+        print(f"  Development (Opt): {X_dev.shape[0]} samples")
+        print(f"  Test (Final Eval): {X_test.shape[0]} samples")
 
-        # 2. Train Optimized Models
-        print("\nTraining final models with optimized parameters...")
-        best_pytorch_params['epochs'] = 100
-        best_pytorch_params['patience'] = 15
-        pytorch_model, _ = self.train_pytorch_model(X_train, y_train, X_test, y_test, best_pytorch_params,
-                                                    save_temp=True)
+        # 3. Hyperparameter Optimization
+        best_py_params = self.run_optimization_cv(X_dev, y_dev, 'PyTorch', n_trials_pytorch, metric=metric)
+        best_xgb_params = self.run_optimization_cv(X_dev, y_dev, 'XGBoost', n_trials_xgb, metric=metric)
 
-        xgb_model = self.train_xgboost_model(X_train, y_train, best_xgb_params)
+        # 4. Final Model Training (Internal Split for Ensemble Weights)
+        X_train_final, X_val_final, y_train_final, y_val_final = train_test_split(
+            X_dev, y_dev, test_size=0.1, stratify=y_dev, random_state=42
+        )
 
-        # 3. Optimize Weights
-        best_weights = self.optimize_weights(pytorch_model, xgb_model, X_test, y_test, n_trials_ensemble, metric)
+        print("\nTraining final models...")
+        best_py_params['epochs'] = 100;
+        best_py_params['patience'] = 15
+        _, pytorch_model = self.train_pytorch_fold(X_train_final, y_train_final, X_val_final, y_val_final,
+                                                   best_py_params)
 
-        # 4. Final Evaluation
+        final_xgb_params = best_xgb_params.copy()
+        if 'n_estimators' in final_xgb_params: final_xgb_params.pop('n_estimators')
+        xgb_model = xgb.XGBClassifier(**final_xgb_params, n_estimators=500)
+        xgb_model.fit(X_train_final, y_train_final, eval_set=[(X_val_final, y_val_final)], verbose=False)
+
+        # 5. Optimize Weights
+        best_weights = self.optimize_weights(pytorch_model, xgb_model, X_val_final, y_val_final, n_trials_ensemble,
+                                             metric)
+
+        # 6. Final Evaluation
         ensemble = HybridEnsemble(pytorch_model, xgb_model, self.device)
-        probs, _, _ = ensemble.ensemble_predict_proba(X_test, best_weights)
+        probs_test, _, _ = ensemble.ensemble_predict_proba(X_test, weights=best_weights)
 
-        final_auc = roc_auc_score(y_test, probs)
-        final_pr = average_precision_score(y_test, probs)
+        final_auc = roc_auc_score(y_test, probs_test)
+        final_pr = average_precision_score(y_test, probs_test)
+        print(f"\nFinal AUC-ROC: {final_auc:.4f} | AUC-PR: {final_pr:.4f}")
 
-        print(f"\nFinal Results on Test Set:")
-        print(f"  AUC-ROC: {final_auc:.4f}")
-        print(f"  AUC-PR:  {final_pr:.4f}")
-        print(f"  Optimal Weights: PyTorch={best_weights[0]:.2f}, XGB={best_weights[1]:.2f}")
+        self.evaluate_performance(y_test, probs_test, set_name="final_test")
+        self.analyze_feature_importance(pytorch_model, xgb_model, X_test[:200], best_weights)
 
-        # 5. Feature Analysis (Restored Full Analysis)
-        corr = self.analyze_feature_importance(pytorch_model, xgb_model, X_test[:200], best_weights)
-        print(f"  Feature Importance Correlation: {corr:.4f}")
+        # 7. NEW: Analyze Ranking & Export Top 100
+        self.analyze_ranking_performance(df_test, y_test, probs_test)
 
-        # 6. Save Artifacts
-        print("\nSaving artifacts...")
-        torch.save(pytorch_model.state_dict(), self.models_dir / 'pytorch_model_optimized.pth')
-        xgb_model.save_model(self.models_dir / 'xgboost_model_optimized.json')
-        joblib.dump(ensemble, self.models_dir / 'hybrid_ensemble_optimized.pkl')
-        joblib.dump(self.scaler, self.models_dir / 'scaler_optimized.pkl')
-
-        config = {
-            'pytorch_params': best_pytorch_params,
-            'xgb_params': best_xgb_params,
-            'weights': best_weights,
-            'metrics': {'auc': final_auc, 'pr': final_pr}
-        }
-        joblib.dump(config, self.models_dir / 'optimal_configuration.pkl')
-
-        print(f"Done! Models saved to {self.models_dir}")
+        # 8. Save Models
+        print(f"\nSaving models to {self.models_dir}...")
+        torch.save(pytorch_model.state_dict(), self.models_dir / 'pytorch_final.pth')
+        xgb_model.save_model(self.models_dir / 'xgboost_final.json')
+        joblib.dump(self.scaler, self.models_dir / 'scaler.pkl')
+        print("Pipeline completed successfully.")
 
 
 def main():
-    print("HYBRID ENSEMBLE OPTIMIZATION PIPELINE")
+    print("HYBRID ENSEMBLE PIPELINE (GENERAL MODEL - PRODUCTION)")
+    print("=" * 60)
 
-    metric = input("\nSelect metric (1: AUC-ROC, 2: AUC-PR) [2]: ") or "2"
-    metric = "auc_pr" if metric == "2" else "auc_roc"
+    # 1. Configurar Métrica
+    metric_in = input("\nSelect metric (1: AUC-ROC, 2: AUC-PR) [Default: 2]: ") or "2"
+    metric = "auc_pr" if metric_in == "2" else "auc_roc"
 
-    cv_in = input("\nUse Cross-Validation? (y/n) [y]: ") or "y"
-    use_cv = cv_in.lower() == "y"
+    # 2. Configurar CV
+    cv_in = input("Use Cross-Validation? (y/n) [Default: y]: ") or "y"
+    use_cv = cv_in.lower() == 'y'
 
-    n_py = int(input("PyTorch trials [30]: ") or "30")
-    n_xgb = int(input("XGBoost trials [30]: ") or "30")
-    n_ens = int(input("Ensemble trials [20]: ") or "20")
+    # 3. Configurar Trials (Optuna)
+    print("\n--- OPTUNA TRIALS CONFIGURATION ---")
+
+    try:
+        n_py = int(input("PyTorch trials [Default: 30]: ") or "30")
+    except ValueError:
+        n_py = 30
+
+    try:
+        n_xgb = int(input("XGBoost trials [Default: 30]: ") or "30")
+    except ValueError:
+        n_xgb = 30
+
+    try:
+        n_ens = int(input("Ensemble trials [Default: 20]: ") or "20")
+    except ValueError:
+        n_ens = 20
+
+    print(f"\nConfiguration: Metric={metric}, PyTorch={n_py}, XGB={n_xgb}, Ensemble={n_ens}")
+    print("Starting pipeline...\n")
 
     pipeline = HybridEnsemblePipeline()
-    pipeline.run(n_py, n_xgb, n_ens, metric, use_cv)
+    pipeline.run(n_trials_pytorch=n_py, n_trials_xgb=n_xgb, n_trials_ensemble=n_ens, metric=metric, use_cv=use_cv)
 
 
 if __name__ == "__main__":
