@@ -136,10 +136,7 @@ class HybridEnsemblePipeline:
 
         self.feature_names = X_df.columns.tolist()
 
-        self.scaler = StandardScaler()
-        X_scaled = self.scaler.fit_transform(X)
-
-        return df, X_scaled, y
+        return df, X, y
 
     # --------------------------------------------------------------------------
     # TRAINING HELPERS
@@ -320,105 +317,233 @@ class HybridEnsemblePipeline:
 
     def analyze_ranking_performance(self, df_test, y_true, y_probs):
         """
-        Calculates Ranking metrics (Top-N Recall, TTIF) and exports Top-100 candidates.
+        Calculates Ranking metrics (Top-N Recall, TTIF) and generates visualization plots.
+        Exports Top-100 candidates and saving plots to figures/performance/.
         """
         print("\n" + "=" * 60)
-        print("RANKING & TOP-N METRICS ANALYSIS (PAPER & ELISPOT)")
+        print("RANKING & TOP-N METRICS ANALYSIS (VISUALIZATION ADDED)")
         print("=" * 60)
 
-        # 1. Prepare Dataframe
+        total_positives = np.sum(y_true)
+        total_samples = len(y_true)
+        print(f"Total Immunogenic in Test Set: {total_positives} out of {total_samples}")
+
+        # 1. Prepare Dataframe and sort by model probability (Ranking)
         results = df_test.copy()
         results['model_probability'] = y_probs
         results['true_label'] = y_true
-
-        # Sort by probability descending (High confidence first)
+        # Sort descending: highest confidence first
         results = results.sort_values(by='model_probability', ascending=False).reset_index(drop=True)
 
-        total_positives = np.sum(y_true)
-        print(f"Total Immunogenic in Test Set: {total_positives}")
+        # --- NEW: Calculate Cumulative Metrics for Plotting ---
+        # Create rank column (1-based index)
+        results['rank'] = np.arange(1, len(results) + 1)
+        # Cumulative sum of positives found down the ranked list
+        results['cumulative_positives'] = results['true_label'].cumsum()
 
-        # 2. Calculate Metrics
+        # Precision at K: (Positives found so far) / (K candidates checked so far)
+        results['precision_at_k'] = results['cumulative_positives'] / results['rank']
+
+        # Recall at K: (Positives found so far) / (Total positives existing in test set)
+        results['recall_at_k'] = results['cumulative_positives'] / total_positives
+
+        # 2. Calculate specific point metrics (same as before)
         auprc = average_precision_score(y_true, y_probs)
 
-        # TTIF (Top-20 Immunogenic Fraction) -> Precision @ 20
-        top_20 = results.head(20)
-        ttif = top_20['true_label'].mean()
+        # TTIF (Top-20 Immunogenic Fraction) -> Value of Precision-at-K where K=20
+        # iloc[19] is the 20th item (rank 20)
+        ttif = results.iloc[19]['precision_at_k']
 
-        # Top-N Recall
+        # Top-N Recalls -> Value of Recall-at-K where K=N
         recalls = {}
         for n in [20, 50, 100]:
-            top_n = results.head(n)
-            positives_recovered = top_n['true_label'].sum()
-            recall_at_n = positives_recovered / total_positives if total_positives > 0 else 0
-            recalls[n] = recall_at_n
+            if n <= len(results):
+                recalls[n] = results.iloc[n-1]['recall_at_k']
+            else:
+                recalls[n] = results.iloc[-1]['recall_at_k']
 
-        fr = 1.0
+        # --- NEW: VISUALIZATION GENERATION ---
+        print("Generating ranking metrics visualization plot...")
+        # Define zoom limit for X-axis (e.g., only look at top 200 for clarity)
+        zoom_k = min(250, len(results))
+        plot_data = results.head(zoom_k)
 
+        fig, axes = plt.subplots(1, 2, figsize=(18, 7))
+
+        # PLOT 1: Precision-at-K Curve (Visualizing TTF20/TTIF)
+        ax1 = axes[0]
+        sns.lineplot(data=plot_data, x='rank', y='precision_at_k', ax=ax1, color='#1f77b4', linewidth=2.5, label='Model Precision')
+
+        # Highlight TTF20 point
+        ax1.scatter(20, ttif, color='red', s=100, zorder=5)
+        ax1.axvline(x=20, color='red', linestyle='--', alpha=0.6, label='Rank 20 Cutoff')
+        ax1.axhline(y=ttif, color='red', linestyle=':', alpha=0.6, label=f'TTF20 (Precision@20): {ttif:.3f}')
+
+        # Add baseline (random guessing prevalence)
+        baseline_precision = total_positives / total_samples
+        ax1.axhline(y=baseline_precision, color='grey', linestyle='-.', label=f'Baseline Prevalence ({baseline_precision:.3f})')
+
+        ax1.set_title('Precision at Rank K (Focus on TTF20)', fontsize=12, fontweight='bold')
+        ax1.set_xlabel('Rank K (Number of top candidates selected)')
+        ax1.set_ylabel('Cumulative Precision (Fraction of Positives)')
+        ax1.set_xlim(1, zoom_k)
+        ax1.set_ylim(0, 1.05)
+        ax1.legend(loc='lower right' if ttif > 0.5 else 'upper right', frameon=True)
+        ax1.grid(True, linestyle='--', alpha=0.7)
+
+        # PLOT 2: Recall-at-K Curve (Visualizing Top-N Recall)
+        ax2 = axes[1]
+        sns.lineplot(data=plot_data, x='rank', y='recall_at_k', ax=ax2, color='#2ca02c', linewidth=2.5, label='Model Recall Accumulation')
+
+        # Highlight specific N Recalls points
+        colors_n = {20: 'red', 50: 'orange', 100: 'purple'}
+        for n, color in colors_n.items():
+            if n <= zoom_k:
+                rec_val = recalls[n]
+                ax2.scatter(n, rec_val, color=color, s=80, zorder=5)
+                ax2.axvline(x=n, color=color, linestyle='--', alpha=0.5)
+                # Only connect horizontal line if it's not 0 to avoid clutter
+                if rec_val > 0:
+                    ax2.plot([1, n], [rec_val, rec_val], color=color, linestyle=':', alpha=0.5)
+                ax2.text(n + 2, rec_val - (0.02 if rec_val > 0.1 else -0.01), f'Recall@{n}: {rec_val:.3f}',
+                         color=color, fontweight='bold', fontsize=9)
+
+        # Add baseline (random guessing recall accumulation - linear slope)
+        # At rank K, random recall is roughly K / total_samples (if total_positives is small relative to total)
+        # More accurately for plotting: A random line from (0,0) to (total_samples, 1.0)
+        random_recall_at_zoom = zoom_k / total_samples
+        ax2.plot([1, zoom_k], [1/total_positives if total_positives > 0 else 0, random_recall_at_zoom],
+                 color='grey', linestyle='-.', label='Random Guessing')
+
+        ax2.set_title('Recall at Rank K (Cumulative Positives Found)', fontsize=12, fontweight='bold')
+        ax2.set_xlabel('Rank K (Number of top candidates selected)')
+        ax2.set_ylabel('Cumulative Recall (Fraction of Total Positives Found)')
+        ax2.set_xlim(1, zoom_k)
+        ax2.set_ylim(0, max(plot_data['recall_at_k'].max() * 1.1, 0.1)) # Adjust y limit based on max recall achieved in zoom window
+        ax2.legend(loc='lower right', frameon=True)
+        ax2.grid(True, linestyle='--', alpha=0.7)
+
+        plt.suptitle(f'Ranking Performance Analysis\n(AUPRC: {auprc:.4f} | TTF20: {ttif:.3f})', fontsize=14, y=1.02)
+        plt.tight_layout()
+
+        # Save plots
+        plot_path = self.figures_dir / 'performance' / 'ranking_metrics_analysis.png'
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"✓ Ranking visualization saved to: {plot_path}")
+
+        # --- Original Table and Export Logic (Kept for consistency) ---
         # 3. Generate Comparative Table
+        fr = 1.0
         benchmarks = {
-            'AUPRC': 0.273,
-            'FR': 0.778,
-            'TTIF': 0.250,
-            'Top-20 Recall': 0.030,
-            'Top-50 Recall': 0.062,
-            'Top-100 Recall': 0.076
+            'AUPRC': 0.273, 'FR': 0.778, 'TTIF': 0.250,
+            'Top-20 Recall': 0.030, 'Top-50 Recall': 0.062, 'Top-100 Recall': 0.076
         }
 
         my_metrics = {
-            'AUPRC': auprc,
-            'FR': fr,
-            'TTIF': ttif,
-            'Top-20 Recall': recalls[20],
-            'Top-50 Recall': recalls[50],
-            'Top-100 Recall': recalls[100]
+            'AUPRC': auprc, 'FR': fr, 'TTIF': ttif,
+            'Top-20 Recall': recalls[20], 'Top-50 Recall': recalls[50], 'Top-100 Recall': recalls[100]
         }
 
         comparison_rows = []
-        for metric, neoval in benchmarks.items():
-            my_val = my_metrics[metric]
-
-            # Diff percentage
-            if neoval > 0:
-                diff_pct = ((my_val - neoval) / neoval) * 100
-                diff_str = f"{diff_pct:+.1f}%"
-            else:
-                diff_str = "N/A"
-
+        for metric_name, neoval in benchmarks.items():
+            my_val = my_metrics[metric_name]
+            diff_str = f"{((my_val - neoval) / neoval) * 100:+.1f}%" if neoval > 0 else "N/A"
             comparison_rows.append({
-                'Metric': metric,
-                'My Model': f"{my_val:.3f}",
-                'NeoRanking (Benchmark)': f"{neoval:.3f}",
-                'Difference': diff_str
+                'Metric': metric_name, 'My Model': f"{my_val:.3f}",
+                'NeoRanking (Benchmark)': f"{neoval:.3f}", 'Difference': diff_str
             })
 
         df_comparison = pd.DataFrame(comparison_rows)
-
         print("\n>>> Comparison Table (My Model vs NeoRanking Benchmark):")
         print(df_comparison.to_string(index=False))
-
-        # Save comparison to CSV
         df_comparison.to_csv(self.reports_dir / 'performance' / 'neoranking_comparison.csv', index=False)
 
         # 4. Export Top 100 Candidates for ELISpot
         print("\n>>> Exporting Top 100 Candidates for ELISpot...")
-        top_100_candidates = results.head(100)
+        top_100_candidates = results.head(100).drop(columns=['cumulative_positives', 'precision_at_k', 'recall_at_k'])
 
-        # Save with timestamp
         filename = f'top_100_elispot_candidates.csv'
         save_path = self.reports_dir / 'elispot_candidates' / filename
-
-        # Select important columns to put first (if they exist in metadata)
         cols = list(top_100_candidates.columns)
-        priority_cols = ['model_probability', 'true_label', 'peptide', 'HLA', 'gene', 'cohort']
+        priority_cols = ['rank', 'model_probability', 'true_label', 'peptide', 'HLA', 'gene', 'cohort']
         ordered_cols = [c for c in priority_cols if c in cols] + [c for c in cols if c not in priority_cols]
-
         top_100_candidates = top_100_candidates[ordered_cols]
         top_100_candidates.to_csv(save_path, index=False)
-
         print(f"✓ Saved: {save_path}")
-        print(f"   - Min Probability in Top 100: {top_100_candidates['model_probability'].min():.4f}")
-        print(f"   - Max Probability in Top 100: {top_100_candidates['model_probability'].max():.4f}")
-        print(f"   - Immunogenic candidates found in Top 100: {top_100_candidates['true_label'].sum()}")
+
+    def plot_ensemble_contribution(self, weights):
+        """
+        Generates a publication-ready figure showing the weight distribution
+        between PyTorch and XGBoost with the mathematical formula.
+        Fixed layout version.
+        """
+        print("\nGenerating Ensemble Contribution Figure...")
+
+        w_nn, w_xgb = weights
+
+        # Usamos estilo 'white' puro para evitar rejillas de fondo molestas en esta figura
+        plt.style.use('seaborn-v0_8-white')
+
+        # 1. Definir Figura con tamaño suficiente (Ancho 10, Alto 4)
+        fig = plt.figure(figsize=(10, 4))
+        ax = fig.add_subplot(111)
+
+        # 2. Control TOTAL del layout: [left, bottom, width, height]
+        # Reservamos: 35% abajo para fórmula, 30% arriba para título/leyenda
+        ax.set_position([0.1, 0.35, 0.8, 0.3])
+
+        # Colores científicos (Azul Pizarra y Naranja Ladrillo)
+        colors = ['#305F88', '#D95319']
+
+        # 3. Dibujar Barras
+        p1 = ax.barh(0, w_nn, height=0.6, color=colors[0], edgecolor='black', linewidth=1,
+                     label='Improved MLP (PyTorch)')
+        p2 = ax.barh(0, w_xgb, left=w_nn, height=0.6, color=colors[1], edgecolor='black', linewidth=1, label='XGBoost')
+
+        # 4. Anotaciones de Porcentaje (Texto blanco en negrita)
+        if w_nn > 0.05:
+            ax.text(w_nn / 2, 0, f"{w_nn * 100:.1f}%",
+                    ha='center', va='center', color='white', fontweight='bold', fontsize=14)
+
+        if w_xgb > 0.05:
+            ax.text(w_nn + w_xgb / 2, 0, f"{w_xgb * 100:.1f}%",
+                    ha='center', va='center', color='white', fontweight='bold', fontsize=14)
+
+        # 5. Limpieza y Formato de Ejes
+        ax.set_xlim(0, 1)
+        ax.set_ylim(-0.5, 0.5)
+        ax.set_yticks([])  # Ocultar eje Y
+
+        # Eje X estilizado
+        ax.set_xticks([0, 0.25, 0.5, 0.75, 1.0])
+        ax.set_xticklabels(['0.0', '0.25', '0.50', '0.75', '1.0'], fontsize=11)
+        ax.set_xlabel('Model Contribution Weight ($w$)', fontsize=12, labelpad=10, fontweight='bold')
+
+        # 6. Leyenda (Colocada justo encima de la barra)
+        ax.legend(loc='lower center', bbox_to_anchor=(0.5, 1.1), ncol=2,
+                  frameon=False, fontsize=11, handletextpad=0.5)
+
+        # 7. Título (Posición absoluta en la figura, arriba del todo)
+        fig.text(0.5, 0.92, 'Hybrid Ensemble Weight Distribution',
+                 ha='center', va='center', fontsize=16, fontweight='bold', color='#333333')
+
+        # 8. Fórmula Matemática (Posición absoluta en la figura, abajo)
+        formula_latex = (
+                r"$P(y=1|x) = \mathbf{" + f"{w_nn:.3f}" + r"} \cdot \sigma(f_{MLP}(x)) + "
+                                                          r"\mathbf{" + f"{w_xgb:.3f}" + r"} \cdot P_{XGB}(x)$"
+        )
+
+        # El cuadro gris redondeado para la fórmula
+        fig.text(0.5, 0.15, formula_latex,
+                 ha='center', va='center', fontsize=16, color='#222222',
+                 bbox=dict(facecolor='#f8f9fa', edgecolor='#cccccc', boxstyle='round,pad=0.6', linewidth=0.5))
+
+        # Guardar
+        save_path = self.figures_dir / 'performance' / 'ensemble_contribution_formula.png'
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"✓ Ensemble contribution figure saved to: {save_path}")
 
     # --------------------------------------------------------------------------
     # MAIN EXECUTION METHOD
@@ -433,6 +558,15 @@ class HybridEnsemblePipeline:
         X_dev, X_test, y_dev, y_test, df_dev, df_test = train_test_split(
             X, y, df, test_size=0.20, random_state=42, stratify=y
         )
+
+        # --- CORRECCIÓN DE FUGA DE DATOS (StandardScaler) ---
+        print("Scaling features based on Development set statistics...")
+        self.scaler = StandardScaler()
+        # 1. Ajustamos (fit) SOLO con los datos de desarrollo
+        X_dev = self.scaler.fit_transform(X_dev)
+        # 2. Transformamos el test con las medias/std del desarrollo (sin mirar el test)
+        X_test = self.scaler.transform(X_test)
+        # ----------------------------------------------------
 
         print(f"\nData Splits:")
         print(f"  Development (Opt): {X_dev.shape[0]} samples")
@@ -461,6 +595,8 @@ class HybridEnsemblePipeline:
         # 5. Optimize Weights
         best_weights = self.optimize_weights(pytorch_model, xgb_model, X_val_final, y_val_final, n_trials_ensemble,
                                              metric)
+
+        self.plot_ensemble_contribution(best_weights)
 
         # 6. Final Evaluation
         ensemble = HybridEnsemble(pytorch_model, xgb_model, self.device)

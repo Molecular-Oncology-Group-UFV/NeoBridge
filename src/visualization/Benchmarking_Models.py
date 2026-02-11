@@ -27,6 +27,7 @@ except ImportError:
 # ML imports
 from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
 from sklearn.preprocessing import StandardScaler
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import (
     roc_auc_score, average_precision_score, f1_score, fbeta_score,
     precision_score, recall_score, balanced_accuracy_score,
@@ -336,36 +337,32 @@ class ModelLoader:
 
     @staticmethod
     def load_model(model_config: ModelConfig) -> Any:
-        """Load model robustly"""
         try:
+            # 1. Cargar clase dinámicamente
             if model_config.class_name in ModelLoader.CLASS_MAP:
                 module_name, class_name = ModelLoader.CLASS_MAP[model_config.class_name]
-
                 if module_name.startswith('imblearn') and not IMBALANCED_LEARN_AVAILABLE:
                     return None
-
                 module = __import__(module_name, fromlist=[class_name])
                 model_class = getattr(module, class_name)
             else:
                 module = __import__(model_config.module_path, fromlist=[model_config.class_name])
                 model_class = getattr(module, model_config.class_name)
 
-            fixed_params = model_config.params.get('fixed_params', {})
-            fixed_params = fixed_params.copy()
+            fixed_params = model_config.params.get('fixed_params', {}).copy()
 
-            # Adjust parallelization parameters
             for param in ['n_jobs', 'nthread', 'num_threads', 'thread_count']:
-                if param in fixed_params:
-                    fixed_params[param] = 1
+                if param in fixed_params: fixed_params[param] = 1
 
-            if model_config.imbalance_strategy == 'class_weight' and 'class_weight' not in fixed_params:
-                fixed_params['class_weight'] = 'balanced'
+            model = model_class(**fixed_params)
 
-            return model_class(**fixed_params)
+            if model_config.name in ['RidgeClassifier', 'LinearSVC']:
+                model = CalibratedClassifierCV(model, method='sigmoid', cv=3)
 
-        except (ImportError, AttributeError) as e:
-            return None
+            return model
+
         except Exception as e:
+            print(f"Error loading {model_config.name}: {e}")
             return None
 
 
@@ -751,122 +748,134 @@ class ModelEvaluator:
 
 
 # ============================================================================
-# RESULTS VISUALIZER
+# RESULTS VISUALIZER (PAPER-READY VERSION)
 # ============================================================================
 
 class ResultsVisualizer:
 
     def __init__(self):
-        # Definimos las dos rutas de salida según la nueva estructura
         self.figures_dir = Path("results/figures/benchmarking")
         self.reports_dir = Path("results/reports/benchmarking")
-
-        # Creamos ambas carpetas
         self.figures_dir.mkdir(parents=True, exist_ok=True)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
 
-        plt.style.use('seaborn-v0_8-whitegrid')
-        sns.set_palette("husl")
+        # Configuración de estilo global para figuras académicas
+        plt.rcParams.update({
+            'font.family': 'serif',  # Tipografía con serifa (estilo LaTeX/Paper)
+            'font.serif': ['DejaVu Serif', 'Times New Roman'],
+            'font.size': 10,
+            'axes.labelsize': 12,
+            'axes.titlesize': 14,
+            'xtick.labelsize': 10,
+            'ytick.labelsize': 10,
+            'legend.fontsize': 10,
+            'figure.titlesize': 16,
+            'axes.grid': True,
+            'grid.alpha': 0.3,
+            'grid.linestyle': '--'
+        })
+        # Paleta de colores profesional (Colorblind friendly)
+        self.colors = sns.color_palette("colorblind")
 
     def plot_performance_comparison(self, results: Dict[str, BenchmarkResults]):
-        """Create main performance comparison plot"""
-
+        """
+        Genera una figura compuesta profesional comparando las métricas principales.
+        Omite tiempos de ejecución.
+        """
         if not results:
             return
 
-        model_names = []
-        auc_roc_scores = []
-        auc_pr_scores = []
-        f1_scores = []
-        f2_scores = []
-        exec_times = []
+        # Preparar datos
+        data = []
+        for model, res in results.items():
+            # Usamos las medias de CV si están disponibles para mayor robustez,
+            # o los scores de test. Aquí uso test scores para consistencia con tu código anterior.
+            data.append({
+                'Model': model,
+                'AUC-ROC': res.test_scores.get('roc_auc', 0),
+                'AUC-PR': res.test_scores.get('average_precision', 0),
+                'F1-Score': res.test_scores.get('f1', 0),
+                'F2-Score': res.test_scores.get('f2', 0)
+            })
 
-        for model_name, result in results.items():
-            model_names.append(model_name)
-            auc_roc_scores.append(result.test_scores.get('roc_auc', 0))
-            auc_pr_scores.append(result.test_scores.get('average_precision', 0))
-            f1_scores.append(result.test_scores.get('f1', 0))
-            f2_scores.append(result.test_scores.get('f2', 0))
-            exec_times.append(result.execution_time)
+        df = pd.DataFrame(data)
+        # Ordenar por AUC-PR para que el mejor modelo quede arriba
+        df = df.sort_values('AUC-PR', ascending=True)
 
-        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-        fig.suptitle('ML Models Benchmarking - Performance Comparison',
-                     fontsize=16, fontweight='bold')
+        # Configurar la figura (2 columnas: Discriminación vs Métricas de Umbral)
+        fig, axes = plt.subplots(1, 2, figsize=(14, len(df) * 0.5 + 2))
+        fig.suptitle('Comparative Model Performance', fontweight='bold', y=0.98)
 
-        ax = axes[0, 0]
-        x = np.arange(len(model_names))
-        width = 0.35
+        # --- Subplot 1: Métricas de Área (AUC) ---
+        # Transformar datos para Seaborn (Long format)
+        df_auc = df.melt(id_vars='Model', value_vars=['AUC-ROC', 'AUC-PR'],
+                         var_name='Metric', value_name='Score')
 
-        bars1 = ax.bar(x - width / 2, auc_roc_scores, width, label='AUC-ROC',
-                       alpha=0.8, color='skyblue', edgecolor='black')
-        bars2 = ax.bar(x + width / 2, auc_pr_scores, width, label='AUC-PR',
-                       alpha=0.8, color='lightcoral', edgecolor='black')
+        sns.barplot(data=df_auc, x='Score', y='Model', hue='Metric',
+                    ax=axes[0], palette=[self.colors[0], self.colors[1]],
+                    edgecolor='black', linewidth=0.5)
 
-        ax.set_xlabel('Models', fontweight='bold')
-        ax.set_ylabel('Score', fontweight='bold')
-        ax.set_title('AUC-ROC vs AUC-PR', fontweight='bold')
-        ax.set_xticks(x)
-        ax.set_xticklabels(model_names, rotation=45, ha='right', fontsize=9)
-        ax.legend()
-        ax.grid(axis='y', alpha=0.3)
+        axes[0].set_title('Discrimination Metrics (AUC)', fontweight='bold')
+        axes[0].set_xlabel('Score')
+        axes[0].set_ylabel('')  # Ocultar label Y redundante
+        axes[0].set_xlim(0, 1.05)
+        axes[0].legend(loc='lower right')
 
-        for bars in [bars1, bars2]:
-            for bar in bars:
-                height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width() / 2, height + 0.01,
-                        f'{height:.3f}', ha='center', va='bottom', fontsize=8)
+        # Añadir valores numéricos al final de las barras
+        for container in axes[0].containers:
+            axes[0].bar_label(container, fmt='%.3f', padding=3, fontsize=8)
 
-        ax = axes[0, 1]
-        bars3 = ax.bar(x - width / 2, f1_scores, width, label='F1-Score',
-                       alpha=0.8, color='lightgreen', edgecolor='black')
-        bars4 = ax.bar(x + width / 2, f2_scores, width, label='F2-Score',
-                       alpha=0.8, color='gold', edgecolor='black')
+        # --- Subplot 2: Métricas F (Balance Precisión/Recall) ---
+        df_f = df.melt(id_vars='Model', value_vars=['F1-Score', 'F2-Score'],
+                       var_name='Metric', value_name='Score')
 
-        ax.set_xlabel('Models', fontweight='bold')
-        ax.set_ylabel('Score', fontweight='bold')
-        ax.set_title('F1-Score vs F2-Score', fontweight='bold')
-        ax.set_xticks(x)
-        ax.set_xticklabels(model_names, rotation=45, ha='right', fontsize=9)
-        ax.legend()
-        ax.grid(axis='y', alpha=0.3)
+        sns.barplot(data=df_f, x='Score', y='Model', hue='Metric',
+                    ax=axes[1], palette=[self.colors[2], self.colors[3]],
+                    edgecolor='black', linewidth=0.5)
 
-        ax = axes[1, 0]
-        colors = plt.cm.viridis(np.linspace(0.3, 0.9, len(model_names)))
-        bars_time = ax.bar(x, exec_times, width=0.8, color=colors, edgecolor='black')
+        axes[1].set_title('Threshold Metrics (F-Scores)', fontweight='bold')
+        axes[1].set_xlabel('Score')
+        axes[1].set_ylabel('')
+        axes[1].set_yticks([])  # Quitar nombres de modelos en el segundo gráfico para limpiar
+        axes[1].set_xlim(0, 1.05)
+        axes[1].legend(loc='lower right')
 
-        ax.set_xlabel('Models', fontweight='bold')
-        ax.set_ylabel('Time (seconds)', fontweight='bold')
-        ax.set_title('Execution Time', fontweight='bold')
-        ax.set_xticks(x)
-        ax.set_xticklabels(model_names, rotation=45, ha='right', fontsize=9)
-        ax.grid(axis='y', alpha=0.3)
-
-        ax = axes[1, 1]
-        scatter = ax.scatter(exec_times, auc_pr_scores, s=100, alpha=0.7,
-                             c=range(len(model_names)), cmap='viridis')
-
-        for i, (model, time_val, auc_pr) in enumerate(zip(model_names, exec_times, auc_pr_scores)):
-            ax.annotate(model, (time_val, auc_pr), xytext=(5, 5),
-                        textcoords='offset points', fontsize=8)
-
-        ax.set_xlabel('Execution Time (s)', fontweight='bold')
-        ax.set_ylabel('AUC-PR', fontweight='bold')
-        ax.set_title('Time vs Performance (AUC-PR)', fontweight='bold')
-        ax.grid(alpha=0.3)
+        for container in axes[1].containers:
+            axes[1].bar_label(container, fmt='%.3f', padding=3, fontsize=8)
 
         plt.tight_layout()
-        plt.savefig(self.figures_dir / 'performance_comparison.png', dpi=300, bbox_inches='tight')
+        plt.savefig(self.figures_dir / 'model_performance_comparison.png', dpi=300, bbox_inches='tight')
+        plt.close()
+
+        # Generar Heatmap adicional (Muy útil para Papers)
+        self._plot_metrics_heatmap(df)
+
+    def _plot_metrics_heatmap(self, df: pd.DataFrame):
+        """Genera un heatmap resumen de todas las métricas para el paper"""
+        # Ordenar descendente para el heatmap
+        df_heat = df.set_index('Model').sort_values('AUC-PR', ascending=False)
+
+        plt.figure(figsize=(8, len(df) * 0.5 + 1))
+        sns.heatmap(df_heat, annot=True, cmap='viridis', fmt='.3f',
+                    linewidths=.5, cbar_kws={'label': 'Score'})
+        plt.title('Performance Metrics Heatmap', fontweight='bold')
+        plt.tight_layout()
+        plt.savefig(self.figures_dir / 'metrics_heatmap.png', dpi=300, bbox_inches='tight')
         plt.close()
 
     def plot_confusion_matrices(self, results: Dict[str, BenchmarkResults],
                                 X_test: np.ndarray, y_test: np.ndarray):
-        """Create confusion matrices for top models"""
+        """
+        Matrices de confusión estilizadas para publicación.
+        Muestra los Top 3 modelos.
+        """
         valid_results = [(name, res) for name, res in results.items()
                          if res.predictions is not None]
 
         if not valid_results:
             return
 
+        # Ordenar por AUC-PR
         valid_results.sort(key=lambda x: x[1].test_scores.get('average_precision', 0),
                            reverse=True)
         top_models = valid_results[:3]
@@ -874,74 +883,71 @@ class ResultsVisualizer:
         if not top_models:
             return
 
-        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-        fig.suptitle('Confusion Matrices - Top 3 Models',
-                     fontsize=16, fontweight='bold')
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
+        # Título general eliminado para que sea más fácil de insertar en documento LaTeX/Word
 
         for idx, (model_name, result) in enumerate(top_models):
             ax = axes[idx]
 
             try:
                 cm = confusion_matrix(y_test, result.predictions)
-                sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax,
-                            cbar_kws={'label': 'Count'})
+                # Normalizar por filas (Recall por clase) para que sea más informativo en desbalanceo
+                # O usar raw counts. Para paper de desbalanceo, raw counts + annotations suele ser mejor.
 
-                ax.set_xlabel('Prediction', fontweight='bold')
-                ax.set_ylabel('Actual', fontweight='bold')
+                sns.heatmap(cm, annot=True, fmt='d', cmap='Greys', ax=ax,
+                            cbar=False, square=True, annot_kws={"size": 14, "weight": "bold"},
+                            linewidths=1, linecolor='black')
+
+                ax.set_xlabel('Predicted Label', fontweight='bold')
+                if idx == 0:
+                    ax.set_ylabel('True Label', fontweight='bold')
+                else:
+                    ax.set_ylabel('')
 
                 auc_pr = result.test_scores.get('average_precision', 0)
-                ax.set_title(f'{model_name}\nAUC-PR: {auc_pr:.3f}')
+                # Título limpio
+                ax.set_title(f'{model_name}\n(AUC-PR: {auc_pr:.3f})', fontsize=12)
+
+                # Labels de clases (asumiendo binario 0/1)
+                ax.set_xticklabels(['Neg', 'Pos'])
+                ax.set_yticklabels(['Neg', 'Pos'], rotation=0)
 
             except Exception as e:
-                ax.text(0.5, 0.5, f'Error\n{e}', ha='center', va='center',
-                        transform=ax.transAxes)
-                ax.set_title(model_name)
+                ax.text(0.5, 0.5, 'Error', ha='center', va='center')
 
         plt.tight_layout()
-        plt.savefig(self.figures_dir / 'confusion_matrices.png', dpi=300, bbox_inches='tight')
+        plt.savefig(self.figures_dir / 'top_confusion_matrices.png', dpi=300, bbox_inches='tight')
         plt.close()
 
     def save_results_table(self, results: Dict[str, BenchmarkResults]) -> pd.DataFrame:
-        """Save results to CSV and LaTeX"""
+        """Guarda tabla CSV limpia sin tiempos"""
         rows = []
         for model_name, result in results.items():
+            # Base metrics
             row = {
                 'Model': model_name,
-                'Time_s': round(result.execution_time, 2),
-                'AUC_ROC': round(result.test_scores.get('roc_auc', 0), 4),
-                'AUC_PR': round(result.test_scores.get('average_precision', 0), 4),
-                'F1': round(result.test_scores.get('f1', 0), 4),
-                'F2': round(result.test_scores.get('f2', 0), 4),
-                'Precision': round(result.test_scores.get('precision', 0), 4),
-                'Recall': round(result.test_scores.get('recall', 0), 4),
-                'Accuracy': round(result.test_scores.get('accuracy', 0), 4),
+                'AUC_ROC': result.test_scores.get('roc_auc', 0),
+                'AUC_PR': result.test_scores.get('average_precision', 0),
+                'F1': result.test_scores.get('f1', 0),
+                'F2': result.test_scores.get('f2', 0),
+                'Precision': result.test_scores.get('precision', 0),
+                'Recall': result.test_scores.get('recall', 0),
+                'Balanced_Acc': result.test_scores.get('balanced_accuracy', 0)
             }
-
-            cv_means = result.get_mean_cv_scores()
-            for metric, mean_score in cv_means.items():
-                row[f'CV_{metric}_mean'] = round(mean_score, 4)
-
             rows.append(row)
 
         df = pd.DataFrame(rows)
+        # Ordenar y redondear
         df = df.sort_values('AUC_PR', ascending=False)
+        df = df.round(4)
 
-        csv_path = self.reports_dir / 'benchmark_results.csv'
+        csv_path = self.reports_dir / 'benchmark_metrics.csv'
         df.to_csv(csv_path, index=False)
 
-        txt_path = self.reports_dir / 'benchmark_summary.txt'
-        with open(txt_path, 'w') as f:
-            f.write("=" * 80 + "\n")
-            f.write("BENCHMARKING RESULTS SUMMARY\n")
-            f.write("=" * 80 + "\n\n")
-
-            f.write("Top 5 Models by AUC-PR:\n")
-            f.write("-" * 40 + "\n")
-            for i, row in df.head().iterrows():
-                f.write(f"{i + 1}. {row['Model']}:\n")
-                f.write(f"   AUC-PR: {row['AUC_PR']:.4f} | AUC-ROC: {row['AUC_ROC']:.4f}\n")
-                f.write(f"   F2-Score: {row['F2']:.4f} | Time: {row['Time_s']:.1f}s\n")
-                f.write("\n")
+        # Generar versión LaTeX para copiar y pegar en el paper
+        latex_path = self.reports_dir / 'benchmark_table_latex.txt'
+        with open(latex_path, 'w') as f:
+            f.write(df.to_latex(index=False, caption="Model Performance Benchmarking", label="tab:benchmarking"))
 
         return df
 

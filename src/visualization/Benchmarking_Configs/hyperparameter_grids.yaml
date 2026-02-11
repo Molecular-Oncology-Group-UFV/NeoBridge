@@ -492,32 +492,13 @@ LinearSVC:
       low: 0.0001
       high: 100
       log: true
-    penalty:
-      type: categorical
-      values: ["l2", "l1"]
-    loss:
-      type: categorical
-      values: ["squared_hinge", "hinge"]
     class_weight:
       type: categorical
-      values: ["balanced", null]
-    dual:
-      type: categorical
-      values: [true, false]
-    fit_intercept:
-      type: categorical
-      values: [true, false]
-    intercept_scaling:
-      type: float
-      low: 0.1
-      high: 10
-    multi_class:
-      type: categorical
-      values: ["ovr", "crammer_singer"]
+      values: ["balanced"]
   fixed_params:
     random_state: 42
     max_iter: 5000
-    tol: 1e-4
+    dual: false
 
 SVC:
   strategy: "bayesian"
@@ -532,37 +513,18 @@ SVC:
       values: ["rbf", "poly", "sigmoid"]
     gamma:
       type: categorical
-      values: ["scale", "auto", 0.001, 0.01, 0.1, 1]
+      values: ["scale", "auto"]
     class_weight:
       type: categorical
-      values: ["balanced", null]
-    degree:
-      type: int
-      low: 2
-      high: 5
-    coef0:
-      type: float
-      low: -1.0
-      high: 1.0
-    shrinking:
-      type: categorical
-      values: [true, false]
-    probability:
-      type: categorical
-      values: [true, false]
+      values: ["balanced"]
   fixed_params:
     random_state: 42
-    max_iter: 1000
+    max_iter: 2000
+    probability: true
 
 SGDClassifier:
   strategy: "bayesian"
   param_space:
-    loss:
-      type: categorical
-      values: ["hinge", "log_loss", "modified_huber", "squared_hinge", "perceptron"]
-    penalty:
-      type: categorical
-      values: ["l2", "l1", "elasticnet"]
     alpha:
       type: float
       low: 0.00001
@@ -572,34 +534,18 @@ SGDClassifier:
       type: float
       low: 0
       high: 1
-    class_weight:
-      type: categorical
-      values: ["balanced", null]
     learning_rate:
       type: categorical
-      values: ["constant", "optimal", "invscaling", "adaptive"]
+      values: ["adaptive", "optimal"]
     eta0:
       type: float
       low: 0.001
       high: 0.1
-    power_t:
-      type: float
-      low: 0.1
-      high: 0.5
-    early_stopping:
-      type: categorical
-      values: [true, false]
-    validation_fraction:
-      type: float
-      low: 0.1
-      high: 0.3
-    n_iter_no_change:
-      type: int
-      low: 5
-      high: 20
   fixed_params:
     random_state: 42
-    max_iter: 1000
+    max_iter: 2000
+    loss: "log_loss"
+    class_weight: "balanced"
 
 RidgeClassifier:
   strategy: "bayesian"
@@ -609,24 +555,12 @@ RidgeClassifier:
       low: 0.1
       high: 100
       log: true
-    class_weight:
-      type: categorical
-      values: ["balanced", null]
     solver:
       type: categorical
-      values: ["auto", "svd", "cholesky", "lsqr", "sparse_cg", "sag", "saga"]
-    fit_intercept:
-      type: categorical
-      values: [true, false]
-    normalize:
-      type: categorical
-      values: [true, false]
-    max_iter:
-      type: int
-      low: 100
-      high: 2000
+      values: ["auto", "svd", "cholesky", "lsqr"]
   fixed_params:
     random_state: 42
+    class_weight: "balanced"
 
 AdaBoost:
   strategy: "bayesian"
@@ -640,7 +574,6 @@ AdaBoost:
       low: 0.001
       high: 1.0
       log: true
-    # algorithm removido - deprecado
   fixed_params:
     random_state: 42
     estimator: "DecisionTreeClassifier(max_depth=1)"
