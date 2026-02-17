@@ -19,6 +19,7 @@ import time
 from scipy.optimize import curve_fit
 from pathlib import Path
 import sys
+import seaborn as sns
 
 warnings.filterwarnings('ignore')
 
@@ -139,7 +140,16 @@ class ScalingCurveBenchmark:
         train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
         val_dataset = TensorDataset(X_val_tensor, y_val_tensor)
 
-        train_loader = DataLoader(train_dataset, batch_size=pytorch_params['batch_size'], shuffle=True)
+        # --- CORRECCIÓN AQUÍ: drop_last=True ---
+        # Esto evita que el último batch tenga tamaño 1 y rompa el BatchNorm
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=pytorch_params['batch_size'],
+            shuffle=True,
+            drop_last=True
+        )
+
+        # El validation loader no necesita drop_last porque corre en mode.eval()
         val_loader = DataLoader(val_dataset, batch_size=pytorch_params['batch_size'])
 
         model = ImprovedMLP(X_train.shape[1], hidden_dims, pytorch_params['dropout_rate']).to(device)
@@ -365,9 +375,12 @@ class ScalingCurveBenchmark:
         if X_full.shape[0] not in scaling_points:
             scaling_points.append(X_full.shape[0])
 
+        # Ordenar y eliminar duplicados por si acaso
+        scaling_points = sorted(list(set(scaling_points)))
+
         print(f"\n" + "=" * 70)
         print("CALCULATING SCALING CURVE")
-        print(f"Points: {scaling_points}")
+        print(f"Points ({len(scaling_points)} steps): {scaling_points}")
         print("=" * 70)
 
         results = {
@@ -436,98 +449,149 @@ class ScalingCurveBenchmark:
         return pd.DataFrame(results)
 
     def plot_results(self, results_df, optimal_params):
-        """Generate and save scaling curve plots."""
+        """Generate and save publication-ready scaling curve plots."""
+        print("Generating scientific scaling curves...")
 
-        # 1. MAIN PLOT: Ensemble Test vs Validation
-        plt.figure(figsize=(12, 8))
-        plt.plot(results_df['data_size'], results_df['ensemble_test_auc'],
-                 'o-', linewidth=2.5, markersize=8, label='Test AUC (unseen data)', color='darkgreen', alpha=0.9)
-        plt.plot(results_df['data_size'], results_df['ensemble_val_auc'],
-                 's--', linewidth=2, markersize=6, label='Validation AUC (tuning)', color='darkblue', alpha=0.7)
-        plt.xlabel('Training Set Size', fontweight='bold')
-        plt.ylabel('AUC-ROC', fontweight='bold')
-        plt.title('Scaling Curve: Generalization Analysis', fontweight='bold')
-        plt.grid(True, alpha=0.3)
-        plt.legend(loc='best')
+        # Función de Ley de Potencia para el ajuste teórico (Learning Curve Theory)
+        # y = a - b * x^(-c)
+        # a: asíntota (rendimiento máximo teórico)
+        def power_law(x, a, b, c):
+            return a - b * np.power(x, -c)
+
+        # Preparar datos para el ajuste
+        x_data = results_df['data_size'].values
+        y_data = results_df['ensemble_test_auc'].values
+
+        # Intentar ajustar la curva teórica (puede fallar si los datos son muy ruidosos)
+        popt = None
+        try:
+            # Límites razonables para a (0.5 a 1.0), b (>0), c (>0)
+            popt, _ = curve_fit(power_law, x_data, y_data,
+                                p0=[0.9, 0.5, 0.3],
+                                bounds=([0.5, 0, 0], [1.0, np.inf, np.inf]),
+                                maxfev=5000)
+        except Exception as e:
+            print(f"No se pudo ajustar la curva teórica: {e}")
+
+        # --- 1. MAIN PLOT: Scientific Scaling Curve ---
+        fig, ax = plt.subplots(figsize=(10, 7))
+
+        # Colores científicos
+        color_test = '#08519c'  # Azul oscuro fuerte
+        color_val = '#9ecae1'  # Azul claro suave
+        color_fit = '#cb181d'  # Rojo oscuro para la teoría
+
+        # Plot Datos Reales (Con marcadores más pequeños y elegantes)
+        ax.plot(results_df['data_size'], results_df['ensemble_test_auc'],
+                'o-', color=color_test, linewidth=1.5, markersize=5,
+                label='Test AUC (Empirical)', alpha=0.9, zorder=3)
+
+        ax.plot(results_df['data_size'], results_df['ensemble_val_auc'],
+                's--', color=color_val, linewidth=1.5, markersize=4,
+                label='Validation AUC', alpha=0.7, zorder=2)
+
+        # Plot Curva Teórica (Si se calculó)
+        if popt is not None:
+            x_smooth = np.linspace(x_data.min(), x_data.max(), 500)
+            y_smooth = power_law(x_smooth, *popt)
+            ax.plot(x_smooth, y_smooth, '--', color=color_fit, linewidth=2,
+                    label=f'Power Law Fit (Asymptote: {popt[0]:.3f})', zorder=1)
+
+            # Marcar la asíntota en el texto
+            ax.text(x_data[-1], popt[0] + 0.005, f"Limit: {popt[0]:.3f}",
+                    color=color_fit, fontsize=9, fontweight='bold', va='bottom', ha='right')
+
+        # --- MEJORA DEL EJE X (TODOS LOS PUNTOS) ---
+        ax.set_xticks(results_df['data_size'])
+        ax.set_xticklabels(results_df['data_size'], rotation=45, fontsize=9)
+
+        # Estética General
+        ax.set_xlabel('Training Set Size (Samples)', fontweight='bold', fontsize=11)
+        ax.set_ylabel('AUC-ROC', fontweight='bold', fontsize=11)
+        ax.set_title('Learning Curve Analysis: Data Scaling', fontweight='bold', fontsize=13, pad=15)
+
+        # Grid suave y limpieza de bordes (Despine)
+        ax.grid(True, linestyle=':', alpha=0.6)
+        sns.despine(ax=ax, trim=True)  # Quita bordes arriba y derecha y recorta los ejes
+
+        # Leyenda limpia
+        ax.legend(frameon=True, framealpha=0.9, loc='lower right', fontsize=10)
+
         plt.tight_layout()
-        plt.savefig(self.figures_dir / 'scaling_curve_test_vs_validation.png', dpi=300)
+        plt.savefig(self.figures_dir / 'scaling_curve_test_vs_validation.png', dpi=300, bbox_inches='tight')
         plt.close()
 
-        # 2. Generalization Gap
-        plt.figure(figsize=(12, 8))
+        # --- 2. Generalization Gap (Simplified) ---
+        plt.figure(figsize=(10, 6))
         gap = results_df['ensemble_val_auc'] - results_df['ensemble_test_auc']
-        plt.plot(results_df['data_size'], gap, 'o-', linewidth=2, label='Val - Test Diff', color='darkred')
-        plt.axhline(y=0, color='gray', linestyle='-')
-        plt.fill_between(results_df['data_size'], 0, gap, where=gap > 0, alpha=0.2, color='red')
-        plt.fill_between(results_df['data_size'], 0, gap, where=gap < 0, alpha=0.2, color='blue')
+
+        plt.fill_between(results_df['data_size'], gap, color='#de2d26', alpha=0.1)
+        plt.plot(results_df['data_size'], gap, 'o-', color='#de2d26', linewidth=1.5, markersize=5)
+
+        plt.axhline(y=0, color='gray', linestyle='--', linewidth=1)
+
+        # Eje X corregido
+        plt.xticks(results_df['data_size'], rotation=45, fontsize=9)
+
         plt.xlabel('Training Set Size', fontweight='bold')
-        plt.ylabel('AUC Difference', fontweight='bold')
-        plt.title('Generalization Gap Analysis', fontweight='bold')
-        plt.grid(True, alpha=0.3)
-        plt.legend()
+        plt.ylabel('Generalization Gap (Val - Test)', fontweight='bold')
+        plt.title('Overfitting Analysis (Generalization Gap)', fontweight='bold')
+
+        sns.despine()
+        plt.grid(True, linestyle=':', alpha=0.4)
         plt.tight_layout()
-        plt.savefig(self.figures_dir / 'generalization_gap_analysis.png', dpi=300)
+        plt.savefig(self.figures_dir / 'generalization_gap_analysis.png', dpi=300, bbox_inches='tight')
         plt.close()
 
-        # 3. Individual Models
-        fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-        # PyTorch
-        axes[0].plot(results_df['data_size'], results_df['pytorch_test_auc'], 'o-', label='Test', color='darkgreen')
-        axes[0].plot(results_df['data_size'], results_df['pytorch_val_auc'], 's--', label='Validation',
-                     color='steelblue')
-        axes[0].set_title('PyTorch MLP', fontweight='bold')
-        axes[0].grid(True, alpha=0.3)
-        axes[0].legend()
-        # XGBoost
-        axes[1].plot(results_df['data_size'], results_df['xgb_test_auc'], 'o-', label='Test', color='darkgreen')
-        axes[1].plot(results_df['data_size'], results_df['xgb_val_auc'], 's--', label='Validation', color='darkorange')
-        axes[1].set_title('XGBoost', fontweight='bold')
-        axes[1].grid(True, alpha=0.3)
-        axes[1].legend()
-        plt.tight_layout()
-        plt.savefig(self.figures_dir / 'individual_models_generalization.png', dpi=300)
-        plt.close()
-
-        # 4. Comprehensive Analysis
+        # --- 3. Comprehensive Analysis (4-panel) - Actualizado ejes X ---
         fig, axes = plt.subplots(2, 2, figsize=(16, 12))
 
-        # Ensemble Performance
-        axes[0, 0].plot(results_df['data_size'], results_df['ensemble_test_auc'], 'o-', color='darkgreen', label='Test')
-        axes[0, 0].plot(results_df['data_size'], results_df['ensemble_val_auc'], 's--', color='darkblue', label='Val')
-        axes[0, 0].set_title('Ensemble: Test vs Validation')
-        axes[0, 0].legend()
-        axes[0, 0].grid(True, alpha=0.3)
+        # A: Ensemble Raw
+        axes[0, 0].plot(results_df['data_size'], results_df['ensemble_test_auc'], 'o-', color=color_test)
+        axes[0, 0].set_title('Ensemble Test Performance')
+        axes[0, 0].set_xticks(results_df['data_size'][::2])  # Mostrar uno sí uno no si hay muchos
+        axes[0, 0].tick_params(axis='x', rotation=45)
 
-        # Model Comparison (Test)
+        # B: Model Comparison
         axes[0, 1].plot(results_df['data_size'], results_df['ensemble_test_auc'], 'o-', label='Ensemble',
-                        color='darkgreen')
+                        color=color_test)
         axes[0, 1].plot(results_df['data_size'], results_df['pytorch_test_auc'], 's--', label='PyTorch',
-                        color='steelblue')
-        axes[0, 1].plot(results_df['data_size'], results_df['xgb_test_auc'], '^--', label='XGBoost', color='darkorange')
-        axes[0, 1].set_title('Test Performance Comparison')
+                        color='#74c476', alpha=0.7)
+        axes[0, 1].plot(results_df['data_size'], results_df['xgb_test_auc'], '^--', label='XGBoost', color='#fd8d3c',
+                        alpha=0.7)
+        axes[0, 1].set_title('Architecture Comparison')
         axes[0, 1].legend()
-        axes[0, 1].grid(True, alpha=0.3)
+        axes[0, 1].set_xticks(results_df['data_size'][::2])
+        axes[0, 1].tick_params(axis='x', rotation=45)
 
-        # AUC-PR
-        axes[1, 0].plot(results_df['data_size'], results_df['ensemble_test_auc_pr'], 'o-', color='darkviolet',
+        # C: AUC-PR
+        axes[1, 0].plot(results_df['data_size'], results_df['ensemble_test_auc_pr'], 'o-', color='#6a51a3',
                         label='AUC-PR')
-        axes[1, 0].set_title('Precision-Recall Curve Area (Test)')
-        axes[1, 0].grid(True, alpha=0.3)
+        axes[1, 0].set_title('Precision-Recall Area (AUC-PR)')
+        axes[1, 0].set_xticks(results_df['data_size'][::2])
+        axes[1, 0].tick_params(axis='x', rotation=45)
 
-        # Saturation
-        normalized_test = results_df['ensemble_test_auc'] / results_df['ensemble_test_auc'].max()
-        axes[1, 1].plot(results_df['data_size'], normalized_test, 'o-', color='darkgreen')
-        axes[1, 1].axhline(y=0.99, color='blue', linestyle=':', label='99% Max')
-        axes[1, 1].set_title('Performance Saturation Analysis')
-        axes[1, 1].legend()
-        axes[1, 1].grid(True, alpha=0.3)
+        # D: Saturation (Normalized)
+        max_auc = results_df['ensemble_test_auc'].max()
+        if max_auc > 0:
+            norm_perf = results_df['ensemble_test_auc'] / max_auc
+            axes[1, 1].plot(results_df['data_size'], norm_perf, 'o-', color='black')
+            axes[1, 1].axhline(0.99, linestyle='--', color='red', label='99% of Max')
+            axes[1, 1].set_title('Performance Saturation (% of Max)')
+            axes[1, 1].legend()
+            axes[1, 1].set_xticks(results_df['data_size'][::2])
+            axes[1, 1].tick_params(axis='x', rotation=45)
 
-        plt.suptitle('Comprehensive Generalization Analysis', fontweight='bold', fontsize=14)
+        for ax in axes.flatten():
+            ax.grid(True, alpha=0.3)
+            sns.despine(ax=ax)
+
+        plt.suptitle('Comprehensive Generalization Benchmark', fontweight='bold', fontsize=16)
         plt.tight_layout()
-        plt.savefig(self.figures_dir / 'comprehensive_generalization_analysis.png', dpi=300)
+        plt.savefig(self.figures_dir / 'comprehensive_generalization_analysis.png', dpi=300, bbox_inches='tight')
         plt.close()
 
-        print(f"\nPlots saved in: {self.figures_dir}")
+        print(f"\n Scientific plots saved in: {self.figures_dir}")
 
     def run(self):
         """Main execution method."""
@@ -562,10 +626,19 @@ class ScalingCurveBenchmark:
         n_trials_input = input("\nNumber of optimization trials [30]: ") or "30"
         n_trials = int(n_trials_input)
 
-        scaling_points_input = input(
-            "\nScaling points (comma separated) [500,1000,2000,4000,6000,8000,10000]: "
-        ) or "500,1000,2000,4000,6000,8000,10000"
-        scaling_points = [int(x.strip()) for x in scaling_points_input.split(',')]
+        # --- CAMBIO REALIZADO AQUÍ ---
+        # Generar puntos de escalado cada 500 muestras automáticamente hasta el total
+        max_samples = X_scaled.shape[0]
+        # range(start, stop, step). Se usa max_samples + 1 para incluir el último rango si es exacto
+        scaling_points = list(range(500, max_samples + 1, 500))
+
+        # Asegurar que el último punto sea el total exacto si no es múltiplo de 500
+        # (para aprovechar todos los datos disponibles)
+        if scaling_points[-1] != max_samples:
+            scaling_points.append(max_samples)
+
+        print(f"\nScaling points generated (every 500): {scaling_points}")
+        # -----------------------------
 
         # Execution
         print("\nPHASE 1: HYPERPARAMETER OPTIMIZATION")

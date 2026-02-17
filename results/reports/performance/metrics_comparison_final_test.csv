@@ -1,0 +1,7 @@
+Metric,F2-Optimized,F1-Optimized
+Threshold,0.1689,0.4219
+Accuracy,0.7151,0.8455
+Precision,0.4792,0.7143
+Recall,0.9159,0.6907
+F1 Score,0.6292,0.7023
+F2 Score,0.7747,0.6953

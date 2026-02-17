@@ -1,0 +1,2 @@
+training_cancer,test_cancer,samples_train,samples_test,positive_ratio_train,positive_ratio_test,ensemble_auc,ensemble_ap,mlp_auc,xgb_auc,optimal_weights_mlp,optimal_weights_xgb,optimal_threshold,accuracy,precision,recall,f1_score
+melanoma,lung,5645,1801,0.2150575730735164,0.4097723486951694,0.7447628662551913,0.6536881103208871,0.7230393094147312,0.7271196465492407,0.3,0.7,0.24574264883995056,0.6141032759578012,0.5163747143945163,0.9186991869918699,0.6611409068746953

@@ -1,0 +1,4 @@
+model,best_params,result,metric,timestamp
+PyTorch,"{'n_layers': 2, 'hidden_dim_0': 430, 'hidden_dim_1': 74, 'lr': 0.0021167273914068697, 'dropout_rate': 0.4956895601097715, 'batch_size': 256, 'weight_decay': 0.0005063792597101454}",0.5149943464964852,auc_pr,2026-01-26 14:45:44
+XGBoost,"{'max_depth': 8, 'learning_rate': 0.028221710519553776, 'n_estimators': 471, 'min_child_weight': 7, 'gamma': 2.2731257070820745, 'subsample': 0.8203463974826136, 'colsample_bytree': 0.8604397524034495, 'scale_pos_weight': 7.146450590581729}",0.5153641939142313,auc_pr,2026-01-26 14:45:58
+Ensemble_Weights,"{'weights': (0.327863666446343, 0.672136333553657)}",0.6116203283175564,auc_pr,2026-01-26 14:51:00

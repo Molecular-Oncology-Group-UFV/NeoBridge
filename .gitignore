@@ -26,3 +26,5 @@ data/raw/
 env/
 venv/
 ENV/
+
+data/pancreas_patients_peptides.csv

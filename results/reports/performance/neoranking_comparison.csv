@@ -1,0 +1,7 @@
+Metric,My Model,NeoRanking (Benchmark),Difference
+AUPRC,0.814,0.273,+198.1%
+FR,1.000,0.778,+28.5%
+TTIF,1.000,0.250,+300.0%
+Top-20 Recall,0.030,0.030,+0.1%
+Top-50 Recall,0.075,0.062,+21.1%
+Top-100 Recall,0.147,0.076,+93.6%
