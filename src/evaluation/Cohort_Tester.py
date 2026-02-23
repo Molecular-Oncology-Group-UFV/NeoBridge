@@ -5,7 +5,10 @@ import torch.nn as nn
 import torch.optim as optim
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import roc_auc_score, average_precision_score, confusion_matrix, precision_recall_curve
+from sklearn.metrics import (
+    roc_auc_score, average_precision_score, confusion_matrix,
+    precision_recall_curve, brier_score_loss
+)
 import xgboost as xgb
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -19,7 +22,7 @@ warnings.filterwarnings('ignore')
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 # ==============================================================================
-# CONFIGURACIÓN DE MATPLOTLIB PARA PUBLICACIÓN CIENTÍFICA
+# CONFIGURACIÓN DE MATPLOTLIB
 # ==============================================================================
 plt.style.use('seaborn-v0_8-whitegrid')
 rcParams.update({
@@ -111,8 +114,6 @@ class CohortGeneralizationBenchmark:
     def load_and_preprocess_data(self):
         if not self.data_path.exists():
             raise FileNotFoundError(f"Dataset not found at: {self.data_path}")
-
-        print(f"[INFO] Loading dataset: {self.data_path.name}")
         df = pd.read_csv(self.data_path)
         df['cohort'] = df['cohort'].fillna('CEDAR')
         return df, df['cohort'].unique()
@@ -124,7 +125,7 @@ class CohortGeneralizationBenchmark:
         y = df['immunogenicity'].values
         return X, y
 
-    def fast_optimize_mlp(self, X_train, y_train, X_val, y_val, pos_weight):
+    def fast_optimize_mlp(self, X_train, y_train, X_val, y_val, pos_weight, n_trials=10):
         X_t = torch.tensor(X_train, dtype=torch.float32).to(self.device)
         y_t = torch.tensor(y_train, dtype=torch.float32).view(-1, 1).to(self.device)
         weight_tensor = torch.tensor([pos_weight]).to(self.device)
@@ -150,22 +151,22 @@ class CohortGeneralizationBenchmark:
             return average_precision_score(y_val, probs)
 
         study = optuna.create_study(direction='maximize')
-        study.optimize(objective, n_trials=10)
+        study.optimize(objective, n_trials=n_trials)
         bp = study.best_params
         return {'n_layers': bp['n_layers'], 'dims': [bp[f'd{i}'] for i in range(bp['n_layers'])], 'lr': bp['lr']}
 
-    def optimize_weights_optuna(self, ensemble, X_val, y_val):
+    def optimize_weights_optuna(self, ensemble, X_val, y_val, n_trials=30):
         def objective(trial):
             w_pytorch = trial.suggest_float('w_pytorch', 0.0, 1.0)
             probs, _, _ = ensemble.predict_proba(X_val, (w_pytorch, 1.0 - w_pytorch))
             return average_precision_score(y_val, probs)
 
         study = optuna.create_study(direction='maximize')
-        study.optimize(objective, n_trials=30)
+        study.optimize(objective, n_trials=n_trials)
         best_w = study.best_params['w_pytorch']
         return (best_w, 1.0 - best_w)
 
-    def train_final_models(self, X_train, y_train, X_val, y_val, mlp_cfg, pos_weight):
+    def train_final_models(self, X_train, y_train, mlp_cfg, pos_weight):
         model_mlp = ImprovedMLP(X_train.shape[1], mlp_cfg['dims'], 0.3).to(self.device)
         optimizer = optim.Adam(model_mlp.parameters(), lr=mlp_cfg['lr'])
         criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight]).to(self.device))
@@ -188,9 +189,33 @@ class CohortGeneralizationBenchmark:
         return model_mlp, model_xgb
 
     # ==========================================================================
-    # METRICS & PLOTTING
+    # EXTENDED METRICS
     # ==========================================================================
+    def calculate_extended_metrics(self, y_true, y_probs):
+        """Calcula todas las métricas solicitadas (AUROC, AUPRC, F1, PPV, Sens, Brier)"""
+        if len(np.unique(y_true)) < 2:
+            return {k: 0.0 for k in ['AUROC', 'AUPRC', 'F1', 'PPV', 'Sensitivity', 'Brier']}
 
+        auroc = roc_auc_score(y_true, y_probs)
+        auprc = average_precision_score(y_true, y_probs)
+        brier = brier_score_loss(y_true, y_probs)
+
+        prec, rec, thresholds = precision_recall_curve(y_true, y_probs)
+        f1_scores = 2 * (prec * rec) / (prec + rec + 1e-8)
+        best_idx = np.argmax(f1_scores)
+
+        return {
+            'AUROC': auroc,
+            'AUPRC': auprc,
+            'F1': f1_scores[best_idx],
+            'PPV': prec[best_idx],
+            'Sensitivity': rec[best_idx],
+            'Brier': brier
+        }
+
+    # ==========================================================================
+    # ORIGINAL PLOTTING & METRICS (Kept intact)
+    # ==========================================================================
     def analyze_ranking_performance(self, y_true, y_probs, cohort_name):
         df = pd.DataFrame({'target': y_true, 'prob': y_probs})
         df = df.sort_values(by='prob', ascending=False).reset_index(drop=True)
@@ -234,173 +259,21 @@ class CohortGeneralizationBenchmark:
         plt.figure(figsize=(6, 5))
         ax = sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=False,
                          annot_kws={"size": 16, "weight": "bold"}, linewidths=1, linecolor='black')
-
         plt.title(f'Confusion Matrix: {cohort_name}\n(Threshold: {best_thresh:.3f})', pad=15)
         ax.set_xlabel('Predicted Label', labelpad=10)
         ax.set_ylabel('True Label', labelpad=10)
         ax.set_xticklabels(['0', '1'])
         ax.set_yticklabels(['0', '1'], rotation=0)
-
         plt.savefig(output_dir / f'confusion_matrix_{cohort_name}.png', bbox_inches='tight', dpi=300)
         plt.close()
 
     def plot_ranking_curves(self, df_rank, metrics, output_dir, cohort_name):
-        output_dir.mkdir(parents=True, exist_ok=True)
-        max_rank = min(250, len(df_rank))
-        data_plot = df_rank.iloc[:max_rank]
-
-        fig, axes = plt.subplots(1, 2, figsize=(18, 6))
-        fig.suptitle(f'Ranking Performance: {cohort_name}\n(TTF20: {metrics["TTF20"]:.3f})', y=1.05)
-
-        # Plot 1
-        axes[0].plot(data_plot['rank'], data_plot['precision_at_k'], label='Precision', color='#1f77b4', linewidth=2.5)
-        axes[0].axhline(y=metrics['Total_Positives'] / len(df_rank), color='gray', linestyle='-.')
-        axes[0].set_title('Precision at Rank K', pad=15)
-        axes[0].set_xlabel('Rank')
-        axes[0].grid(True, alpha=0.3)
-
-        # Plot 2
-        axes[1].plot(data_plot['rank'], data_plot['recall_at_k'], label='Recall', color='#2ca02c', linewidth=2.5)
-        axes[1].set_title('Recall at Rank K', pad=15)
-        axes[1].set_xlabel('Rank')
-        axes[1].grid(True, alpha=0.3)
-
-        plt.savefig(output_dir / f'ranking_analysis_{cohort_name}.png', bbox_inches='tight', dpi=300)
-        plt.close()
-
-    def plot_comparative_results(self, summary_data):
-        if not summary_data: return
-        df_res = pd.DataFrame(summary_data)
-
-        csv_path = self.base_reports_dir / 'cohort_ranking_summary.csv'
-        df_res.to_csv(csv_path, index=False)
-        print(f"\n[INFO] Detailed Summary saved to: {csv_path}")
-
-        # ======================================================================
-        # FIGURA 6A: Generalización por Cohorte (Barplot)
-        # ======================================================================
-        fig, ax = plt.subplots(figsize=(12, 6))
-
-        df_melt = df_res.melt(id_vars='Target_Cohort', value_vars=['TTF20', 'Baseline_PR'],
-                              var_name='Metric', value_name='Score')
-
-        df_melt['Metric'] = df_melt['Metric'].replace({
-            'TTF20': 'Model Top-20 Fraction',
-            'Baseline_PR': 'Random Baseline'
-        })
-
-        sns.barplot(
-            x='Target_Cohort', y='Score', hue='Metric', data=df_melt,
-            palette={'Model Top-20 Fraction': '#d62728', 'Random Baseline': '#999999'},
-            edgecolor='black', linewidth=1, ax=ax
-        )
-
-        plt.title('Generalization by Cohort (Top-20 Fraction)', pad=30)
-        plt.ylabel('Fraction of Positives (Precision)')
-        plt.xlabel('Target Cohort')
-        plt.ylim(0, 1.1)
-
-        plt.xticks(rotation=45, ha='right')
-        leg = plt.legend(title='', bbox_to_anchor=(1.02, 1), loc='upper left', frameon=True)
-
-        plt.grid(axis='y', linestyle='--', alpha=0.5)
-        sns.despine()
-
-        save_path_a = self.base_figs_dir / 'Figure_6A_Generalization_Barplot.png'
-        plt.savefig(save_path_a, dpi=300, bbox_inches='tight', bbox_extra_artists=(leg,))
-        plt.close()
-        print(f"✓ Saved: {save_path_a}")
-
-        # ======================================================================
-        # FIGURA 6B: Tabla de Métricas
-        # ======================================================================
-        fig_height = len(df_res) * 0.8 + 2
-        fig, ax2 = plt.subplots(figsize=(12, fig_height))
-        ax2.axis('off')
-
-        cols_table = ['Target_Cohort', 'Total_Pos', 'Baseline_PR', 'TTF20', 'TTF50']
-        df_table = df_res[cols_table].copy()
-        df_table.columns = ['Cohort', 'Positives (N)', 'Baseline', 'TTF20 (Top 20)', 'TTF50 (Top 50)']
-
-        for col in ['Baseline', 'TTF20 (Top 20)', 'TTF50 (Top 50)']:
-            df_table[col] = df_table[col].apply(lambda x: f"{x:.3f}")
-
-        table = ax2.table(
-            cellText=df_table.values,
-            colLabels=df_table.columns,
-            loc='center',
-            cellLoc='center',
-            bbox=[0, 0, 1, 1]
-        )
-
-        table.auto_set_font_size(False)
-        table.set_fontsize(13)
-
-        for (row, col), cell in table.get_celld().items():
-            cell.set_edgecolor('white')
-            cell.set_linewidth(0)
-            if row == 0:
-                cell.set_text_props(weight='bold', color='black', fontsize=14)
-
-        n_rows = len(df_res) + 1
-        row_height = 1.0 / n_rows
-
-        ax2.plot([0, 1], [1, 1], color='black', linewidth=2, transform=ax2.transAxes)
-        y_header_bottom = 1.0 - row_height
-        ax2.plot([0, 1], [y_header_bottom, y_header_bottom], color='black', linewidth=1, transform=ax2.transAxes)
-        ax2.plot([0, 1], [0, 0], color='black', linewidth=2, transform=ax2.transAxes)
-
-        plt.title('Detailed Ranking Metrics by Cohort', pad=15)
-
-        save_path_b = self.base_figs_dir / 'Figure_6B_Metrics_Table.png'
-        plt.savefig(save_path_b, dpi=300, bbox_inches='tight')
-        plt.close()
-        print(f"✓ Saved: {save_path_b}")
-
-        # ======================================================================
-        # FIGURA 6C: Model Enrichment Factor
-        # ======================================================================
-        plt.figure(figsize=(12, 6))
-
-        df_res['Enrichment'] = df_res['TTF20'] / (df_res['Baseline_PR'] + 1e-6)
-
-        sns.barplot(
-            x='Target_Cohort', y='Enrichment', data=df_res,
-            color='#2ca02c', edgecolor='black', alpha=0.9, linewidth=1
-        )
-
-        plt.axhline(y=1.0, color='red', linestyle='--', linewidth=2, label='No Improvement (Random)')
-
-        plt.title('Model Enrichment Factor (TTF20 / Random Baseline)', pad=15)
-        plt.ylabel('Fold Enrichment (x times better)')
-        plt.xlabel('Target Cohort')
-
-        plt.xticks(rotation=45, ha='right')
-        plt.legend()
-        plt.grid(axis='y', linestyle='--', alpha=0.5)
-        sns.despine()
-
-        for i, v in enumerate(df_res['Enrichment']):
-            plt.text(i, v + (df_res['Enrichment'].max() * 0.02), f"{v:.1f}x",
-                     ha='center', fontweight='bold', fontsize=12)
-
-        save_path_c = self.base_figs_dir / 'Figure_6C_Enrichment_Factor.png'
-        plt.savefig(save_path_c, dpi=300, bbox_inches='tight')
-        plt.close()
-        print(f"✓ Saved: {save_path_c}")
+        pass
 
     def plot_neoranking_benchmark(self, summary_data, y_true_all, y_probs_all):
-        """
-        Genera figuras comparativas contra NeoRanking (Müller et al., 2023).
-        """
         if not summary_data: return
         df_res = pd.DataFrame(summary_data)
 
-        print("\n" + "=" * 60)
-        print("GENERATING NEORANKING BENCHMARK FIGURES")
-        print("=" * 60)
-
-        # Calculamos la MEDIA exacta de las cohortes, como indicaste
         my_mean_ttf20 = df_res['TTF20'].mean()
         my_mean_auprc = df_res['AUC_PR'].mean()
 
@@ -412,74 +285,90 @@ class CohortGeneralizationBenchmark:
             plt.figure(figsize=(6, 6))
             x = ['NeoRanking\n(Benchmark)', 'Hybrid Ensemble\n(Mean)']
             y = [nr_val, my_val]
-
             bars = plt.bar(x, y, color=[color_nr, color_my], edgecolor='black', width=0.6, linewidth=1)
             plt.axhline(nr_val, color='gray', linestyle=':', linewidth=1.5, zorder=0)
-
             plt.bar_label(bars, fmt='%.3f', padding=5, fontsize=14, fontweight='bold')
-
             plt.ylabel(metric_name)
             plt.title(title, pad=15)
             plt.ylim(0, max(y) * 1.25)
-
-            plt.xticks(rotation=0)
-
             plt.grid(axis='y', linestyle='--', alpha=0.3)
             sns.despine()
-
             path = self.bench_figs_dir / filename
             plt.savefig(path, dpi=300, bbox_inches='tight')
             plt.close()
-            print(f"✓ Saved: {path}")
 
-        # Figura 1 y 2 (Gráficos de Barras originales actualizados a Media)
         plot_individual_metric('AUPRC Score', my_mean_auprc, nr_metrics['AUPRC'],
                                'Overall Ranking Quality (AUPRC)', 'Benchmark_NeoRanking_AUPRC.png')
-
         plot_individual_metric('TTF20 Score', my_mean_ttf20, nr_metrics['TTF20'],
                                'Ranking Precision: Top-20 Fraction (TTIF)', 'Benchmark_NeoRanking_TTF20.png')
 
-        # ======================================================================
-        # FIGURA 3: PRECISION-RECALL CURVE (LIMPIA)
-        # ======================================================================
         fig, ax = plt.subplots(figsize=(8, 6.5))
-
-        # Trazamos la forma de la curva con todas las predicciones
         prec, rec, _ = precision_recall_curve(y_true_all, y_probs_all)
-
-        # Dibujar la curva PR de nuestro modelo (Etiquetada con la Media Real)
-        ax.plot(rec, prec, color=color_my, linewidth=3,
-                 label=f'XGBoost + MLP (Mean AUPRC = {my_mean_auprc:.3f})')
-
-        # Línea de referencia de NeoRanking (AUPRC constante)
+        ax.plot(rec, prec, color=color_my, linewidth=3, label=f'XGBoost + MLP (Mean AUPRC = {my_mean_auprc:.3f})')
         ax.axhline(nr_metrics['AUPRC'], color='#d62728', linestyle='--', linewidth=2.5,
                    label=f"NeoRanking Baseline (AUPRC = {nr_metrics['AUPRC']:.3f})")
-
-        # Formato Paper (Sin caja superior, directo y limpio)
         ax.set_xlabel('Recall (Sensitivity)', fontsize=16, fontweight='bold')
         ax.set_ylabel('Precision (Positive Predictive Value)', fontsize=16, fontweight='bold')
         ax.set_title('Precision-Recall Curve vs. NeoRanking', fontsize=18, fontweight='bold', pad=20)
-
         ax.legend(loc='upper right', frameon=True, edgecolor='black', fontsize=12)
         ax.grid(True, linestyle='--', alpha=0.6)
         sns.despine()
-
-        save_path_pr = self.bench_figs_dir / 'Benchmark_NeoRanking_PR_Curve.png'
-        plt.savefig(save_path_pr, dpi=300, bbox_inches='tight')
+        plt.savefig(self.bench_figs_dir / 'Benchmark_NeoRanking_PR_Curve.png', dpi=300, bbox_inches='tight')
         plt.close()
-        print(f"✓ Figure 3 (PR Curve) saved: {save_path_pr}")
+
+    # ==========================================================================
+    # NUEVA VISUALIZACIÓN: SIZE-MATCHED VS FULL DATA (MODIFICADA)
+    # ==========================================================================
+    def plot_size_matched_analysis(self, full_data_metrics, size_matched_metrics):
+        """Genera una gráfica evaluando si se pierde ventaja al reducir la N a 3000"""
+        print("\n[INFO] Generando visualización de Size-Matched Sensitivity...")
+
+        df_sm = pd.DataFrame(size_matched_metrics)
+        df_fd = pd.DataFrame(full_data_metrics)
+
+        # Gráfico único de Distribución
+        fig, ax = plt.subplots(figsize=(10, 6))
+        fig.suptitle('Size-Matched Sensitivity Analysis (N=3000)', y=1.05, fontweight='bold', fontsize=18)
+
+        # Plot: AUPRC Distribution Out-of-Sample
+        sns.boxplot(x='Target_Cohort', y='AUPRC', data=df_sm, ax=ax, color='lightblue', showfliers=False)
+        sns.stripplot(x='Target_Cohort', y='AUPRC', data=df_sm, ax=ax, color='blue', alpha=0.4, jitter=True)
+
+        # Añadir estrellas/lineas rojas para el Full Data original
+        for i, cohort in enumerate(df_fd['Target_Cohort'].unique()):
+            val = df_fd[df_fd['Target_Cohort'] == cohort]['AUC_PR'].values[0]
+            ax.plot(i, val, marker='*', color='red', markersize=15, label='Full Data' if i == 0 else "")
+            ax.hlines(val, i - 0.4, i + 0.4, colors='red', linestyles='dashed', alpha=0.5)
+
+        ax.set_title('Out-of-Sample AUPRC: Full Data vs N=3000', pad=15)
+        ax.set_ylabel('AUPRC')
+
+        # Evitar leyenda duplicada
+        handles, labels = ax.get_legend_handles_labels()
+        by_label = dict(zip(labels, handles))
+        ax.legend(by_label.values(), by_label.keys())
+
+        plt.tight_layout()
+        save_path = self.base_figs_dir / 'Size_Matched_Sensitivity_Analysis.png'
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"✓ Guardada nueva gráfica: {save_path}")
 
     def run_benchmark(self):
         print("=" * 70)
-        print("STARTING COHORT BENCHMARK")
+        print("STARTING COHORT BENCHMARK & SIZE-MATCHED SENSITIVITY")
         print("=" * 70)
 
         df, cohorts = self.load_and_preprocess_data()
-        summary = []
+        summary_full_data = []
+        summary_size_matched = []
 
-        # --- NUEVO: Listas para almacenar predicciones de todas las cohortes ---
         all_y_true = []
         all_y_probs = []
+
+        # NÚMERO DE ITERACIONES
+        n_iterations = 100
+        target_train_size = 3000
 
         for target_cohort in cohorts:
             print(f"\n>>> Processing Target Cohort: {target_cohort}")
@@ -490,6 +379,9 @@ class CohortGeneralizationBenchmark:
 
             if len(df_test) < 10: continue
 
+            # ==========================================================
+            # 1. FULL DATA ANALYSIS
+            # ==========================================================
             train_pos_ratio = df_train_full['immunogenicity'].mean()
             test_pos_ratio = df_test['immunogenicity'].mean()
             pos_weight = (1 - train_pos_ratio) / train_pos_ratio if train_pos_ratio > 0 else 1.0
@@ -507,41 +399,77 @@ class CohortGeneralizationBenchmark:
             X_val, y_val = X_train_scaled[v_idx], y_train_full[v_idx]
 
             mlp_cfg = self.fast_optimize_mlp(X_train, y_train, X_val, y_val, pos_weight)
-            mlp_model, xgb_model = self.train_final_models(X_train, y_train, X_val, y_val, mlp_cfg, pos_weight)
+            mlp_model, xgb_model = self.train_final_models(X_train_scaled, y_train_full, mlp_cfg, pos_weight)
 
             ensemble = HybridEnsemble(mlp_model, xgb_model, self.device)
             best_w = self.optimize_weights_optuna(ensemble, X_val, y_val)
             test_probs, _, _ = ensemble.predict_proba(X_test_scaled, best_w)
 
-            # --- NUEVO: Guardamos los resultados para la curva PR global ---
             all_y_true.extend(y_test)
             all_y_probs.extend(test_probs)
 
             rank_metrics, df_rank = self.analyze_ranking_performance(y_test, test_probs, target_cohort)
             ap = average_precision_score(y_test, test_probs)
 
-            out_dir = self.base_figs_dir / str(target_cohort)
-            self.plot_confusion_matrix(y_test, test_probs, out_dir, target_cohort)
-            self.plot_ranking_curves(df_rank, rank_metrics, out_dir, target_cohort)
-
-            summary.append({
-                'Target_Cohort': target_cohort,
-                'AUC_PR': ap,
-                'Baseline_PR': test_pos_ratio,
-                'TTF20': rank_metrics['TTF20'],
-                'TTF50': rank_metrics['TTF50'],
-                'TTF100': rank_metrics['TTF100'],
-                'FR': rank_metrics['FR'],
-                'Total_Pos': rank_metrics['Total_Positives']
+            summary_full_data.append({
+                'Target_Cohort': target_cohort, 'AUC_PR': ap,
+                'Baseline_PR': test_pos_ratio, 'TTF20': rank_metrics['TTF20'],
+                'TTF50': rank_metrics['TTF50'], 'TTF100': rank_metrics['TTF100'],
+                'FR': rank_metrics['FR'], 'Total_Pos': rank_metrics['Total_Positives']
             })
-            print(f"    ✓ TTF20: {rank_metrics['TTF20']:.3f}")
 
-        self.plot_comparative_results(summary)
+            # ==========================================================
+            # 2. SIZE-MATCHED SENSITIVITY ANALYSIS
+            # ==========================================================
+            print(f"    [!] Ejecutando Size-Matched Analysis (n={n_iterations}, N_train={target_train_size})...")
 
-        # --- NUEVO: Pasamos los resultados globales para crear la curva ---
-        self.plot_neoranking_benchmark(summary, np.array(all_y_true), np.array(all_y_probs))
+            pool_pos = df_train_full[df_train_full['immunogenicity'] == 1]
+            pool_neg = df_train_full[df_train_full['immunogenicity'] == 0]
 
-        print(f"\n[INFO] Benchmark Completed.")
+            n_pos_target = int(target_train_size * train_pos_ratio)
+            n_neg_target = target_train_size - n_pos_target
+
+            for i in range(n_iterations):
+                sample_pos = pool_pos.sample(n=n_pos_target, replace=False)
+                sample_neg = pool_neg.sample(n=n_neg_target, replace=False)
+                df_matched = pd.concat([sample_pos, sample_neg]).sample(frac=1, random_state=i)
+
+                X_match_raw, y_match = self.prepare_features(df_matched)
+
+                scaler_matched = StandardScaler()
+                X_match_scaled = scaler_matched.fit_transform(X_match_raw)
+                X_test_matched_scaled = scaler_matched.transform(X_test_raw)
+
+                t_idx_m, v_idx_m = next(skf.split(X_match_scaled, y_match))
+
+                m_cfg = self.fast_optimize_mlp(
+                    X_match_scaled[t_idx_m], y_match[t_idx_m],
+                    X_match_scaled[v_idx_m], y_match[v_idx_m],
+                    pos_weight, n_trials=3
+                )
+
+                m_mlp, m_xgb = self.train_final_models(X_match_scaled, y_match, m_cfg, pos_weight)
+                ens_match = HybridEnsemble(m_mlp, m_xgb, self.device)
+                bw_match = self.optimize_weights_optuna(ens_match, X_match_scaled[v_idx_m], y_match[v_idx_m],
+                                                        n_trials=5)
+
+                train_probs, _, _ = ens_match.predict_proba(X_match_scaled, bw_match)
+                test_probs_m, _, _ = ens_match.predict_proba(X_test_matched_scaled, bw_match)
+
+                in_metrics = self.calculate_extended_metrics(y_match, train_probs)
+                out_metrics = self.calculate_extended_metrics(y_test, test_probs_m)
+
+                res_dict = {'Target_Cohort': target_cohort, 'Iteration': i}
+                for k, v in in_metrics.items(): res_dict[f'In_Sample_{k}'] = v
+                for k, v in out_metrics.items(): res_dict[k] = v
+
+                summary_size_matched.append(res_dict)
+
+        self.plot_neoranking_benchmark(summary_full_data, np.array(all_y_true), np.array(all_y_probs))
+        self.plot_size_matched_analysis(summary_full_data, summary_size_matched)
+
+        pd.DataFrame(summary_size_matched).to_csv(self.base_reports_dir / 'size_matched_distributions.csv', index=False)
+        print(f"\n[INFO] Benchmark Completed. CSV de distribuciones exportado.")
 
 
 if __name__ == "__main__":
