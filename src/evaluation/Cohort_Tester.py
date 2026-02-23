@@ -18,14 +18,32 @@ import warnings
 warnings.filterwarnings('ignore')
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-# Figure settings
+# ==============================================================================
+# CONFIGURACIÓN DE MATPLOTLIB PARA PUBLICACIÓN CIENTÍFICA
+# ==============================================================================
 plt.style.use('seaborn-v0_8-whitegrid')
-rcParams['font.family'] = 'DejaVu Sans'
-rcParams['figure.titlesize'] = 14
+rcParams.update({
+    'font.family': 'sans-serif',
+    'font.sans-serif': ['Arial', 'Helvetica', 'DejaVu Sans'],
+    'font.size': 14,
+    'axes.titlesize': 16,
+    'axes.labelsize': 16,
+    'axes.titleweight': 'bold',
+    'axes.labelweight': 'bold',
+    'xtick.labelsize': 14,
+    'ytick.labelsize': 14,
+    'legend.fontsize': 13,
+    'legend.title_fontsize': 14,
+    'figure.titlesize': 18,
+    'figure.dpi': 300,
+    'savefig.dpi': 300,
+    'pdf.fonttype': 42,
+    'ps.fonttype': 42
+})
 
 
 # ==============================================================================
-# MODEL ARCHITECTURES (Sin cambios)
+# MODEL ARCHITECTURES
 # ==============================================================================
 
 class ImprovedMLP(nn.Module):
@@ -192,7 +210,6 @@ class CohortGeneralizationBenchmark:
             else:
                 return dataframe.iloc[-1][metric_col]
 
-        # Calcular Fraction Ranked (FR) Global
         pos_in_top_100 = df.iloc[:100]['target'].sum()
         fr_score = pos_in_top_100 / total_positives
 
@@ -213,11 +230,17 @@ class CohortGeneralizationBenchmark:
         best_thresh = thresholds[np.argmax(f1_scores)]
         preds = (y_probs >= best_thresh).astype(int)
         cm = confusion_matrix(y_true, preds)
+
         plt.figure(figsize=(6, 5))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=False)
-        plt.title(f'Confusion Matrix: {cohort_name}')
-        plt.xlabel('Predicted')
-        plt.ylabel('True')
+        ax = sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=False,
+                         annot_kws={"size": 16, "weight": "bold"}, linewidths=1, linecolor='black')
+
+        plt.title(f'Confusion Matrix: {cohort_name}\n(Threshold: {best_thresh:.3f})', pad=15)
+        ax.set_xlabel('Predicted Label', labelpad=10)
+        ax.set_ylabel('True Label', labelpad=10)
+        ax.set_xticklabels(['0', '1'])
+        ax.set_yticklabels(['0', '1'], rotation=0)
+
         plt.savefig(output_dir / f'confusion_matrix_{cohort_name}.png', bbox_inches='tight', dpi=300)
         plt.close()
 
@@ -225,41 +248,38 @@ class CohortGeneralizationBenchmark:
         output_dir.mkdir(parents=True, exist_ok=True)
         max_rank = min(250, len(df_rank))
         data_plot = df_rank.iloc[:max_rank]
+
         fig, axes = plt.subplots(1, 2, figsize=(18, 6))
-        fig.suptitle(f'Ranking Performance: {cohort_name}\n(TTF20: {metrics["TTF20"]:.3f})', fontsize=14)
+        fig.suptitle(f'Ranking Performance: {cohort_name}\n(TTF20: {metrics["TTF20"]:.3f})', y=1.05)
 
         # Plot 1
-        axes[0].plot(data_plot['rank'], data_plot['precision_at_k'], label='Precision', color='#1f77b4')
+        axes[0].plot(data_plot['rank'], data_plot['precision_at_k'], label='Precision', color='#1f77b4', linewidth=2.5)
         axes[0].axhline(y=metrics['Total_Positives'] / len(df_rank), color='gray', linestyle='-.')
-        axes[0].set_title('Precision at Rank K');
-        axes[0].set_xlabel('Rank');
+        axes[0].set_title('Precision at Rank K', pad=15)
+        axes[0].set_xlabel('Rank')
         axes[0].grid(True, alpha=0.3)
 
         # Plot 2
-        axes[1].plot(data_plot['rank'], data_plot['recall_at_k'], label='Recall', color='#2ca02c')
-        axes[1].set_title('Recall at Rank K');
-        axes[1].set_xlabel('Rank');
+        axes[1].plot(data_plot['rank'], data_plot['recall_at_k'], label='Recall', color='#2ca02c', linewidth=2.5)
+        axes[1].set_title('Recall at Rank K', pad=15)
+        axes[1].set_xlabel('Rank')
         axes[1].grid(True, alpha=0.3)
 
-        plt.savefig(output_dir / f'ranking_analysis_{cohort_name}.png', dpi=300);
+        plt.savefig(output_dir / f'ranking_analysis_{cohort_name}.png', bbox_inches='tight', dpi=300)
         plt.close()
 
     def plot_comparative_results(self, summary_data):
         if not summary_data: return
         df_res = pd.DataFrame(summary_data)
 
-        # Guardar CSV crudo
         csv_path = self.base_reports_dir / 'cohort_ranking_summary.csv'
         df_res.to_csv(csv_path, index=False)
         print(f"\n[INFO] Detailed Summary saved to: {csv_path}")
 
-        # Configuración de estilo "Paper"
-        sns.set_theme(style="white", font="DejaVu Sans")
-
         # ======================================================================
         # FIGURA 6A: Generalización por Cohorte (Barplot)
         # ======================================================================
-        plt.figure(figsize=(10, 6))
+        fig, ax = plt.subplots(figsize=(12, 6))
 
         df_melt = df_res.melt(id_vars='Target_Cohort', value_vars=['TTF20', 'Baseline_PR'],
                               var_name='Metric', value_name='Score')
@@ -272,39 +292,39 @@ class CohortGeneralizationBenchmark:
         sns.barplot(
             x='Target_Cohort', y='Score', hue='Metric', data=df_melt,
             palette={'Model Top-20 Fraction': '#d62728', 'Random Baseline': '#999999'},
-            edgecolor='black', linewidth=0.5
+            edgecolor='black', linewidth=1, ax=ax
         )
 
-        plt.title('Generalization by Cohort (Top-20 Fraction)', fontsize=14, fontweight='bold', pad=15)
-        plt.ylabel('Fraction of Positives (Precision)', fontsize=12, fontweight='bold')
-        plt.xlabel('Target Cohort', fontsize=12, fontweight='bold')
+        plt.title('Generalization by Cohort (Top-20 Fraction)', pad=30)
+        plt.ylabel('Fraction of Positives (Precision)')
+        plt.xlabel('Target Cohort')
         plt.ylim(0, 1.1)
-        plt.legend(title='', loc='upper right', frameon=True)
+
+        plt.xticks(rotation=45, ha='right')
+        leg = plt.legend(title='', bbox_to_anchor=(1.02, 1), loc='upper left', frameon=True)
+
         plt.grid(axis='y', linestyle='--', alpha=0.5)
         sns.despine()
 
         save_path_a = self.base_figs_dir / 'Figure_6A_Generalization_Barplot.png'
-        plt.savefig(save_path_a, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path_a, dpi=300, bbox_inches='tight', bbox_extra_artists=(leg,))
         plt.close()
         print(f"✓ Saved: {save_path_a}")
 
         # ======================================================================
-        # FIGURA 6B: Tabla de Métricas (Estilo Científico APA)
+        # FIGURA 6B: Tabla de Métricas
         # ======================================================================
-        # Calculamos altura dinámica para que la tabla no quede aplastada
-        fig_height = len(df_res) * 0.6 + 2
-        fig, ax2 = plt.subplots(figsize=(10, fig_height))
+        fig_height = len(df_res) * 0.8 + 2
+        fig, ax2 = plt.subplots(figsize=(12, fig_height))
         ax2.axis('off')
 
         cols_table = ['Target_Cohort', 'Total_Pos', 'Baseline_PR', 'TTF20', 'TTF50']
         df_table = df_res[cols_table].copy()
         df_table.columns = ['Cohort', 'Positives (N)', 'Baseline', 'TTF20 (Top 20)', 'TTF50 (Top 50)']
 
-        # Formateo de números
         for col in ['Baseline', 'TTF20 (Top 20)', 'TTF50 (Top 50)']:
             df_table[col] = df_table[col].apply(lambda x: f"{x:.3f}")
 
-        # Dibujar tabla ocupando todo el subplot
         table = ax2.table(
             cellText=df_table.values,
             colLabels=df_table.columns,
@@ -313,38 +333,24 @@ class CohortGeneralizationBenchmark:
             bbox=[0, 0, 1, 1]
         )
 
-        # --- ESTILIZADO CIENTÍFICO (3 LÍNEAS HORIZONTALES) ---
         table.auto_set_font_size(False)
-        table.set_fontsize(11)
+        table.set_fontsize(13)
 
-        # Iterar sobre las celdas para quitar bordes y formatear
         for (row, col), cell in table.get_celld().items():
-            cell.set_edgecolor('white')  # Ocultar bordes por defecto
+            cell.set_edgecolor('white')
             cell.set_linewidth(0)
-            cell.set_text_props(fontfamily='DejaVu Sans')
-
-            # Cabecera en negrita
             if row == 0:
-                cell.set_text_props(weight='bold', color='black', fontsize=12)
+                cell.set_text_props(weight='bold', color='black', fontsize=14)
 
-        # DIBUJAR LÍNEAS MANUALMENTE (Top, Header-Bottom, Table-Bottom)
-        # Coordenadas relativas al eje (0 a 1)
-        # Altura de una fila = 1 / (n_filas + 1 cabecera)
         n_rows = len(df_res) + 1
         row_height = 1.0 / n_rows
 
-        # 1. Línea Superior (Top of Header)
         ax2.plot([0, 1], [1, 1], color='black', linewidth=2, transform=ax2.transAxes)
-
-        # 2. Línea Debajo de Cabecera (Bottom of Header)
-        # La cabecera ocupa el espacio de 1.0 hasta (1.0 - row_height)
         y_header_bottom = 1.0 - row_height
         ax2.plot([0, 1], [y_header_bottom, y_header_bottom], color='black', linewidth=1, transform=ax2.transAxes)
-
-        # 3. Línea Inferior (Bottom of Table)
         ax2.plot([0, 1], [0, 0], color='black', linewidth=2, transform=ax2.transAxes)
 
-        plt.title('Detailed Ranking Metrics by Cohort', fontsize=14, fontweight='bold', y=1.02)
+        plt.title('Detailed Ranking Metrics by Cohort', pad=15)
 
         save_path_b = self.base_figs_dir / 'Figure_6B_Metrics_Table.png'
         plt.savefig(save_path_b, dpi=300, bbox_inches='tight')
@@ -354,35 +360,38 @@ class CohortGeneralizationBenchmark:
         # ======================================================================
         # FIGURA 6C: Model Enrichment Factor
         # ======================================================================
-        plt.figure(figsize=(10, 6))
+        plt.figure(figsize=(12, 6))
 
         df_res['Enrichment'] = df_res['TTF20'] / (df_res['Baseline_PR'] + 1e-6)
 
         sns.barplot(
             x='Target_Cohort', y='Enrichment', data=df_res,
-            color='#2ca02c', edgecolor='black', alpha=0.9
+            color='#2ca02c', edgecolor='black', alpha=0.9, linewidth=1
         )
 
         plt.axhline(y=1.0, color='red', linestyle='--', linewidth=2, label='No Improvement (Random)')
 
-        plt.title('Model Enrichment Factor (TTF20 / Random Baseline)', fontsize=14, fontweight='bold', pad=15)
-        plt.ylabel('Fold Enrichment (x times better)', fontsize=12, fontweight='bold')
-        plt.xlabel('Target Cohort', fontsize=12, fontweight='bold')
+        plt.title('Model Enrichment Factor (TTF20 / Random Baseline)', pad=15)
+        plt.ylabel('Fold Enrichment (x times better)')
+        plt.xlabel('Target Cohort')
+
+        plt.xticks(rotation=45, ha='right')
         plt.legend()
         plt.grid(axis='y', linestyle='--', alpha=0.5)
         sns.despine()
 
         for i, v in enumerate(df_res['Enrichment']):
-            plt.text(i, v + 0.2, f"{v:.1f}x", ha='center', fontweight='bold', fontsize=11)
+            plt.text(i, v + (df_res['Enrichment'].max() * 0.02), f"{v:.1f}x",
+                     ha='center', fontweight='bold', fontsize=12)
 
         save_path_c = self.base_figs_dir / 'Figure_6C_Enrichment_Factor.png'
         plt.savefig(save_path_c, dpi=300, bbox_inches='tight')
         plt.close()
         print(f"✓ Saved: {save_path_c}")
 
-    def plot_neoranking_benchmark(self, summary_data):
+    def plot_neoranking_benchmark(self, summary_data, y_true_all, y_probs_all):
         """
-        Genera 3 figuras comparativas contra NeoRanking (Müller et al., 2023).
+        Genera figuras comparativas contra NeoRanking (Müller et al., 2023).
         """
         if not summary_data: return
         df_res = pd.DataFrame(summary_data)
@@ -391,26 +400,30 @@ class CohortGeneralizationBenchmark:
         print("GENERATING NEORANKING BENCHMARK FIGURES")
         print("=" * 60)
 
-        my_median_ttf20 = df_res['TTF20'].median()
-        my_median_auprc = df_res['AUC_PR'].median()
-        my_median_fr = df_res['FR'].median()
+        # Calculamos la MEDIA exacta de las cohortes, como indicaste
+        my_mean_ttf20 = df_res['TTF20'].mean()
+        my_mean_auprc = df_res['AUC_PR'].mean()
 
-        nr_metrics = {'TTF20': 0.250, 'AUPRC': 0.273, 'FR': 0.778}
-        color_nr = '#999999';
+        nr_metrics = {'TTF20': 0.250, 'AUPRC': 0.273}
+        color_nr = '#999999'
         color_my = '#084594'
 
         def plot_individual_metric(metric_name, my_val, nr_val, title, filename):
             plt.figure(figsize=(6, 6))
-            x = ['NeoRanking (Benchmark)', 'Hybrid Ensemble (Median)']
+            x = ['NeoRanking\n(Benchmark)', 'Hybrid Ensemble\n(Mean)']
             y = [nr_val, my_val]
 
-            bars = plt.bar(x, y, color=[color_nr, color_my], edgecolor='black', width=0.6)
-            plt.axhline(nr_val, color='gray', linestyle=':', linewidth=1, zorder=0)
-            plt.bar_label(bars, fmt='%.3f', padding=3, fontsize=12, fontweight='bold')
+            bars = plt.bar(x, y, color=[color_nr, color_my], edgecolor='black', width=0.6, linewidth=1)
+            plt.axhline(nr_val, color='gray', linestyle=':', linewidth=1.5, zorder=0)
 
-            plt.ylabel(metric_name, fontweight='bold', fontsize=11)
-            plt.title(title, fontweight='bold', fontsize=13, pad=15)
+            plt.bar_label(bars, fmt='%.3f', padding=5, fontsize=14, fontweight='bold')
+
+            plt.ylabel(metric_name)
+            plt.title(title, pad=15)
             plt.ylim(0, max(y) * 1.25)
+
+            plt.xticks(rotation=0)
+
             plt.grid(axis='y', linestyle='--', alpha=0.3)
             sns.despine()
 
@@ -419,14 +432,42 @@ class CohortGeneralizationBenchmark:
             plt.close()
             print(f"✓ Saved: {path}")
 
-        # Figura 1: AUPRC
-        plot_individual_metric('AUPRC Score', my_median_auprc, nr_metrics['AUPRC'],
+        # Figura 1 y 2 (Gráficos de Barras originales actualizados a Media)
+        plot_individual_metric('AUPRC Score', my_mean_auprc, nr_metrics['AUPRC'],
                                'Overall Ranking Quality (AUPRC)', 'Benchmark_NeoRanking_AUPRC.png')
 
-        # Figura 2: TTF20 (Unificada con otras profundidades si se desea, o individual)
-        # Aquí seguimos la lógica individual por consistencia
-        plot_individual_metric('TTF20 Score', my_median_ttf20, nr_metrics['TTF20'],
+        plot_individual_metric('TTF20 Score', my_mean_ttf20, nr_metrics['TTF20'],
                                'Ranking Precision: Top-20 Fraction (TTIF)', 'Benchmark_NeoRanking_TTF20.png')
+
+        # ======================================================================
+        # FIGURA 3: PRECISION-RECALL CURVE (LIMPIA)
+        # ======================================================================
+        fig, ax = plt.subplots(figsize=(8, 6.5))
+
+        # Trazamos la forma de la curva con todas las predicciones
+        prec, rec, _ = precision_recall_curve(y_true_all, y_probs_all)
+
+        # Dibujar la curva PR de nuestro modelo (Etiquetada con la Media Real)
+        ax.plot(rec, prec, color=color_my, linewidth=3,
+                 label=f'XGBoost + MLP (Mean AUPRC = {my_mean_auprc:.3f})')
+
+        # Línea de referencia de NeoRanking (AUPRC constante)
+        ax.axhline(nr_metrics['AUPRC'], color='#d62728', linestyle='--', linewidth=2.5,
+                   label=f"NeoRanking Baseline (AUPRC = {nr_metrics['AUPRC']:.3f})")
+
+        # Formato Paper (Sin caja superior, directo y limpio)
+        ax.set_xlabel('Recall (Sensitivity)', fontsize=16, fontweight='bold')
+        ax.set_ylabel('Precision (Positive Predictive Value)', fontsize=16, fontweight='bold')
+        ax.set_title('Precision-Recall Curve vs. NeoRanking', fontsize=18, fontweight='bold', pad=20)
+
+        ax.legend(loc='upper right', frameon=True, edgecolor='black', fontsize=12)
+        ax.grid(True, linestyle='--', alpha=0.6)
+        sns.despine()
+
+        save_path_pr = self.bench_figs_dir / 'Benchmark_NeoRanking_PR_Curve.png'
+        plt.savefig(save_path_pr, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"✓ Figure 3 (PR Curve) saved: {save_path_pr}")
 
     def run_benchmark(self):
         print("=" * 70)
@@ -435,6 +476,10 @@ class CohortGeneralizationBenchmark:
 
         df, cohorts = self.load_and_preprocess_data()
         summary = []
+
+        # --- NUEVO: Listas para almacenar predicciones de todas las cohortes ---
+        all_y_true = []
+        all_y_probs = []
 
         for target_cohort in cohorts:
             print(f"\n>>> Processing Target Cohort: {target_cohort}")
@@ -468,6 +513,10 @@ class CohortGeneralizationBenchmark:
             best_w = self.optimize_weights_optuna(ensemble, X_val, y_val)
             test_probs, _, _ = ensemble.predict_proba(X_test_scaled, best_w)
 
+            # --- NUEVO: Guardamos los resultados para la curva PR global ---
+            all_y_true.extend(y_test)
+            all_y_probs.extend(test_probs)
+
             rank_metrics, df_rank = self.analyze_ranking_performance(y_test, test_probs, target_cohort)
             ap = average_precision_score(y_test, test_probs)
 
@@ -488,7 +537,10 @@ class CohortGeneralizationBenchmark:
             print(f"    ✓ TTF20: {rank_metrics['TTF20']:.3f}")
 
         self.plot_comparative_results(summary)
-        self.plot_neoranking_benchmark(summary)
+
+        # --- NUEVO: Pasamos los resultados globales para crear la curva ---
+        self.plot_neoranking_benchmark(summary, np.array(all_y_true), np.array(all_y_probs))
+
         print(f"\n[INFO] Benchmark Completed.")
 
 

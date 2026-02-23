@@ -27,4 +27,4 @@ env/
 venv/
 ENV/
 
-data/pancreas_patients_peptides.csv
+data/processed/pancreas_patients_peptides.csv

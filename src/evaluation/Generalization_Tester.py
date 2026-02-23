@@ -20,8 +20,19 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 # Figure configuration for publication
 plt.style.use('seaborn-v0_8-whitegrid')
-rcParams['font.family'] = 'DejaVu Sans'
-rcParams['figure.titlesize'] = 14
+rcParams.update({
+    'font.family': 'sans-serif',
+    'font.sans-serif': ['Arial', 'Helvetica', 'DejaVu Sans'],
+    'font.size': 14,
+    'axes.titlesize': 16,
+    'axes.labelsize': 16,
+    'axes.titleweight': 'bold',
+    'axes.labelweight': 'bold',
+    'xtick.labelsize': 14,
+    'ytick.labelsize': 14,
+    'legend.fontsize': 13,
+    'figure.titlesize': 18
+})
 
 
 # ==============================================================================
@@ -215,36 +226,72 @@ class GeneralizationBenchmark:
         """Generates and saves publication-quality ROC and Confusion Matrix plots."""
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1. ROC Curve Comparison
-        plt.figure(figsize=(8, 6))
-        fpr_v, tpr_v, _ = roc_curve(val_y, val_probs)
-        fpr_t, tpr_t, _ = roc_curve(test_y, test_probs)
+        # ==========================================
+        # 1. ROC Curve Comparison (Publication Quality)
+        # ==========================================
+        fig, ax = plt.subplots(figsize=(8, 6.5))
 
+        fpr_v, tpr_v, _ = roc_curve(val_y, val_probs)
         auc_v = roc_auc_score(val_y, val_probs)
+
+        fpr_t, tpr_t, _ = roc_curve(test_y, test_probs)
         auc_t = roc_auc_score(test_y, test_probs)
 
-        plt.plot(fpr_v, tpr_v, label=f'Validation (Known Cancers) AUC={auc_v:.2f}', linestyle='--')
-        plt.plot(fpr_t, tpr_t, label=f'Generalization ({cancer_title}) AUC={auc_t:.2f}', linewidth=2.5, color='#d62728')
-        plt.plot([0, 1], [0, 1], 'k--', alpha=0.3)
-        plt.xlabel('False Positive Rate')
-        plt.ylabel('True Positive Rate')
-        plt.title(f'ROC Curve: Generalization to {cancer_title}')
-        plt.legend(loc='lower right')
+        # Líneas
+        ax.plot(fpr_v, tpr_v, linestyle='--', color='#1f77b4', linewidth=2,
+                 label=f'Validation (Known Cancers) AUC={auc_v:.2f}')
+        ax.plot(fpr_t, tpr_t, linestyle='-', color='#d62728', linewidth=3,
+                 label=f'Generalization ({cancer_title}) AUC={auc_t:.2f}')
+        ax.plot([0, 1], [0, 1], color='grey', linestyle='--', alpha=0.7)
+
+        # Textos y Etiquetas
+        ax.set_xlabel('False Positive Rate')
+        ax.set_ylabel('True Positive Rate')
+        ax.set_title(f'ROC Curve: Generalization to {cancer_title}', pad=20)
+
+        # Caja de estadísticas superior
+        total_samples = len(test_y)
+        pos_pct = (sum(test_y) / total_samples) * 100
+        stats_text = f"Total Samples: {total_samples} | Positive: {pos_pct:.1f}%"
+
+        # CORRECCIÓN ROC: Usamos coordenadas relativas al eje (ax.transAxes).
+        # y=1.15 asegura que la caja esté siempre un 15% por encima del borde superior del gráfico,
+        # totalmente separada del título.
+        ax.text(0.5, 1.15, stats_text, transform=ax.transAxes,
+                ha='center', va='center', fontsize=14, fontweight='bold',
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='#f8f9fa', edgecolor='#cccccc'))
+
+        ax.legend(loc='lower right', frameon=True, edgecolor='black')
+        ax.grid(True, linestyle='--', alpha=0.6)
+        sns.despine()
+
+        # CORRECCIÓN ROC: Quitamos el tight_layout() normal que comprimía la figura.
+        # Guardamos con bbox_inches='tight' que recalcula dinámicamente el espacio para que quepa la caja.
         plt.savefig(output_dir / 'roc_curve.png', dpi=300, bbox_inches='tight')
         plt.close()
 
-        # 2. Confusion Matrix (Using Optimal F1 Threshold)
+        # ==========================================
+        # 2. Confusion Matrix (Publication Quality)
+        # ==========================================
         prec, rec, thresholds = precision_recall_curve(test_y, test_probs)
         f1_scores = 2 * (prec * rec) / (prec + rec + 1e-8)
         best_thresh = thresholds[np.argmax(f1_scores)]
         preds = (test_probs >= best_thresh).astype(int)
 
         cm = confusion_matrix(test_y, preds)
+
         plt.figure(figsize=(6, 5))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=False)
-        plt.title(f'Confusion Matrix\n{cancer_title} (Thresh={best_thresh:.2f})')
-        plt.xlabel('Predicted')
-        plt.ylabel('True')
+        ax = sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                         annot_kws={"size": 14})  # Números grandes
+
+        ax.set_xlabel('Predicted', fontsize=14, labelpad=10)
+        ax.set_ylabel('True', fontsize=14, labelpad=10)
+        ax.set_xticklabels(['0', '1'], fontsize=12)
+        ax.set_yticklabels(['0', '1'], fontsize=12, rotation=0)
+
+        plt.title(f'Confusion Matrix ({cancer_title})\nThresh: {best_thresh:.3f}', fontsize=16, pad=15)
+
+        plt.tight_layout()
         plt.savefig(output_dir / 'confusion_matrix.png', dpi=300, bbox_inches='tight')
         plt.close()
 

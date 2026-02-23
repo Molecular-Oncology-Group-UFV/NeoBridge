@@ -7,13 +7,12 @@ from pathlib import Path
 import matplotlib.ticker as ticker
 import sys
 
-
 class CohortVisualizer:
 
     def __init__(self):
         # Path configuration
         self.project_root = Path(__file__).resolve().parent.parent.parent
-        self.data_path = self.project_root / 'data' / 'processed' / 'dataset_80_20_normalized_tcr_with_cohort.csv'
+        self.data_path = self.project_root / 'data' / 'processed' / 'dataset_80_20_normalized_tcr_with_cohort_and_rank.csv'
 
         self.output_dir = self.project_root / 'results' / 'figures' / 'cancer_cohort_figures'
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -25,20 +24,32 @@ class CohortVisualizer:
 
     def _setup_style(self):
         """Sets up matplotlib style for scientific publication."""
-        # Using a cleaner base style
         plt.style.use('seaborn-v0_8-ticks')
-        rcParams['font.family'] = 'DejaVu Sans'
-        rcParams['font.size'] = 11
-        rcParams['axes.labelsize'] = 12
-        rcParams['axes.titlesize'] = 14
+        # Fuentes preferidas en publicaciones científicas
+        rcParams['font.family'] = 'sans-serif'
+        rcParams['font.sans-serif'] = ['Arial', 'Helvetica', 'DejaVu Sans']
+
+        # Tamaños base ampliados
+        rcParams['font.size'] = 14
+        rcParams['axes.titlesize'] = 16
+        rcParams['axes.labelsize'] = 16
         rcParams['axes.titleweight'] = 'bold'
-        rcParams['xtick.labelsize'] = 10
-        rcParams['ytick.labelsize'] = 10
-        rcParams['legend.fontsize'] = 10
-        rcParams['figure.titlesize'] = 14
-        # Ensure white background for exports
+        rcParams['axes.labelweight'] = 'bold' # Añadido para que los labels de los ejes sean bold por defecto
+        rcParams['xtick.labelsize'] = 14
+        rcParams['ytick.labelsize'] = 14
+        rcParams['legend.fontsize'] = 12
+        rcParams['legend.title_fontsize'] = 14 # Añadido para el título de las leyendas
+        rcParams['figure.titlesize'] = 18
+
+        # Espaciados por defecto (para evitar hardcodear labelpad y pad)
+        rcParams['axes.labelpad'] = 10
+        rcParams['axes.titlepad'] = 15
+
+        # Configuración para exportación de alta calidad
         rcParams['figure.facecolor'] = 'white'
         rcParams['axes.facecolor'] = 'white'
+        rcParams['pdf.fonttype'] = 42
+        rcParams['ps.fonttype'] = 42
 
     def load_data(self) -> pd.DataFrame:
         """Loads and cleans the dataset."""
@@ -72,7 +83,7 @@ class CohortVisualizer:
         # Setup figure
         fig, ax = plt.subplots(1, 1, figsize=(6, 7))
 
-        # Colors (Consistent with Figure 2): 0=Blue/Grey, 1=Teal
+        # Colors
         colors = ['#305F88', '#4FA890']
         labels = ['Negative', 'Positive']
 
@@ -82,19 +93,19 @@ class CohortVisualizer:
 
         # Labels and Title
         ax.set_xticks(range(len(counts)))
-        ax.set_xticklabels(labels, fontweight='bold')
-        ax.set_ylabel('Number of Records', fontweight='bold', labelpad=10)
-        ax.set_title('Global Immunogenicity Distribution', pad=15)
+        ax.set_xticklabels(labels)
+        ax.set_ylabel('Number of Records')
+        ax.set_title('Global Immunogenicity Distribution')
 
         # Y-axis formatter
         ax.yaxis.set_major_formatter(ticker.StrMethodFormatter('{x:,.0f}'))
 
-        # Annotations
+        # Annotations (Se mantiene color negro para contraste)
         for bar, count, pct in zip(bars, counts.values, percentages.values):
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width() / 2, height + (total * 0.01),
                     f"{count:,}\n({pct:.1f}%)",
-                    ha='center', va='bottom', fontsize=11, fontweight='bold', color='black')
+                    ha='center', va='bottom', color='black')
 
         ax.set_ylim(0, max(counts.values) * 1.15)
         ax.grid(axis='y', alpha=0.15, linestyle='--', color='gray')
@@ -110,27 +121,34 @@ class CohortVisualizer:
         print("Generating Figure 1: Cancer Distribution...")
         cancer_counts = df['Cancer_Type'].value_counts()
 
-        fig, ax = plt.subplots(1, 1, figsize=(12, 7))
+        # CAMBIO 1: Aumentamos el ancho de la figura de 12 a 16 para separar las barras
+        fig, ax = plt.subplots(1, 1, figsize=(16, 8))
 
         bar_color = '#305F88'
 
         bars = ax.bar(range(len(cancer_counts)), cancer_counts.values,
                       color=bar_color, edgecolor='#333333', linewidth=0.7, width=0.75)
 
-        ax.set_xlabel('Cancer Type', fontweight='bold', labelpad=10)
-        ax.set_ylabel('Number of Records', fontweight='bold', labelpad=10)
-        ax.set_title('Global Distribution of Cancer Types', pad=20)
+        ax.set_xlabel('Cancer Type')
+        ax.set_ylabel('Number of Records')
+        ax.set_title('Global Distribution of Cancer Types')
+
+        max_y = max(cancer_counts.values)
 
         for bar, count in zip(bars, cancer_counts.values):
             height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width() / 2, height + (max(cancer_counts.values) * 0.01),
-                    f'{count:,}', ha='center', va='bottom', fontsize=9, color='black')
+            # CAMBIO 2: Añadimos rotation=90 para que los números suban en vertical y no choquen
+            ax.text(bar.get_x() + bar.get_width() / 2, height + (max_y * 0.02),
+                    f'{count:,}', ha='center', va='bottom', color='black',
+                    rotation=90)
 
         ax.set_xticks(range(len(cancer_counts)))
         ax.set_xticklabels(cancer_counts.index, rotation=45, ha='right')
 
         ax.yaxis.set_major_formatter(ticker.StrMethodFormatter('{x:,.0f}'))
-        ax.set_ylim(0, max(cancer_counts.values) * 1.1)
+
+        # CAMBIO 3: Damos un 25% extra de margen superior (en vez de 10%) para que quepan los textos rotados
+        ax.set_ylim(0, max_y * 1.25)
 
         ax.grid(axis='y', alpha=0.2, linestyle='--', color='gray')
         sns.despine()
@@ -178,18 +196,16 @@ class CohortVisualizer:
         plot_data.plot(kind='barh', stacked=True, ax=ax, color=colors,
                        edgecolor='#333333', linewidth=0.7, width=0.75)
 
-        ax.set_ylabel('Cohort', fontweight='bold')
-        ax.set_xlabel('Number of Records', fontweight='bold')
-        ax.set_title('Immunogenicity Distribution by Cohort', pad=20)
+        ax.set_ylabel('Cohort')
+        ax.set_xlabel('Number of Records')
+        ax.set_title('Immunogenicity Distribution by Cohort')
 
-        ax.legend(title='Immunogenicity', title_fontsize=10, fontsize=10,
-                  loc='lower right', frameon=True, framealpha=0.9, edgecolor='white')
+        ax.legend(title='Immunogenicity', loc='lower right', frameon=True, framealpha=0.9, edgecolor='white')
 
         label_threshold = 200
         for c in ax.containers:
             labels = [f'{int(v.get_width())}' if v.get_width() > label_threshold else '' for v in c]
-            ax.bar_label(c, labels=labels, label_type='center',
-                         fontsize=10, fontweight='bold', color='white')
+            ax.bar_label(c, labels=labels, label_type='center', color='white')
 
         max_x = 0
         for idx, (cohort, row) in enumerate(cohort_stats.iterrows()):
@@ -197,8 +213,7 @@ class CohortVisualizer:
             max_x = max(max_x, total)
             ax.text(total + (total * 0.015), idx,
                     f'{int(total)}',
-                    ha='left', va='center',
-                    fontsize=10, fontweight='bold', color='black')
+                    ha='left', va='center', color='black')
 
         ax.grid(axis='x', alpha=0.2, linestyle='--', color='gray')
         ax.set_xlim(0, max_x * 1.1)
@@ -216,17 +231,11 @@ class CohortVisualizer:
         # 1. Data Preparation
         df['cohort_clean'] = df['cohort_clean'].replace('Unknown', 'CEDAR')
 
-        # --- FILTRO AVANZADO: Casos >= 30 Y Eliminar 'Unknown' ---
         cancer_counts = df['Cancer_Type'].value_counts()
-
-        # Primero obtenemos los que tienen más de 30 casos
         valid_cancers = cancer_counts[cancer_counts >= 30].index.tolist()
-
-        # Luego eliminamos 'Unknown' de la lista si existe
         if 'Unknown' in valid_cancers:
             valid_cancers.remove('Unknown')
 
-        # Filtramos el dataframe
         df_filtered = df[df['Cancer_Type'].isin(valid_cancers)]
         print(f"Heatmap filtered: Keeping {len(valid_cancers)} cancer types (>= 30 cases, excluding Unknown).")
 
@@ -234,37 +243,30 @@ class CohortVisualizer:
             print("Warning: No valid cancer types found. Skipping heatmap.")
             return
 
-        # Calculate percentages on filtered data
         cross_tab = pd.crosstab(df_filtered['cohort_clean'], df_filtered['Cancer_Type'], normalize='index') * 100
-
-        # 2. Transpose (Rows=Cancers, Cols=Cohorts)
         cross_tab = cross_tab.T
 
-        # 3. Sorting and Reindexing
         cohort_order = df['cohort_clean'].value_counts().index
-        cancer_order = valid_cancers  # Usamos el orden ya filtrado
-
+        cancer_order = valid_cancers
         cross_tab = cross_tab.reindex(index=cancer_order, columns=cohort_order)
 
-        # 4. Plotting Setup
         n_rows, n_cols = cross_tab.shape
 
-        # Ajustamos altura dinámicamente según las filas restantes (menos filas = figura más corta)
-        figsize_h = n_rows * 0.5 + 2
-        figsize_w = n_cols * 1.5 + 3
+        # CAMBIO 1: Hacemos que el multiplicador de anchura sea mucho mayor (2.5)
+        # Esto estirará la figura horizontalmente dando espacio a los porcentajes.
+        figsize_w = n_cols * 2.5 + 4
+        figsize_h = n_rows * 0.6 + 2
 
         fig, ax = plt.subplots(figsize=(figsize_w, figsize_h))
-
         cmap = 'magma_r'
 
+        # CAMBIO 2: ELIMINADO el parámetro 'square=True'
+        # Esto permite que las celdas adopten una forma rectangular más natural
         sns.heatmap(cross_tab, cmap=cmap, ax=ax,
                     linewidths=0.5, linecolor='white',
-                    cbar_kws={'label': 'Prevalence (%)', 'shrink': 0.5, 'aspect': 20},
-                    square=True,
-                    vmin=0, vmax=100
-                    )
+                    cbar_kws={'label': 'Prevalence (%)', 'shrink': 0.7, 'aspect': 25},
+                    vmin=0, vmax=100)
 
-        # 5. Annotations
         threshold_to_show = 2.0
         threshold_text_color = 40.0
 
@@ -276,13 +278,11 @@ class CohortVisualizer:
                 if val >= threshold_to_show:
                     text_color = 'white' if val > threshold_text_color else 'black'
                     ax.text(x + 0.5, y + 0.5, f'{val:.1f}%',
-                            ha='center', va='center', color=text_color,
-                            fontsize=9, fontweight='bold')
+                            ha='center', va='center', color=text_color)
 
-        # 6. Labels
-        ax.set_xlabel('Cohort', fontweight='bold', labelpad=10)
-        ax.set_ylabel('Cancer Type (Known & >= 30 Cases)', fontweight='bold', labelpad=10)
-        ax.set_title('Cancer Type Prevalence by Cohort', pad=20)
+        ax.set_xlabel('Cohort')
+        ax.set_ylabel('Cancer Type (Known & >= 30 Cases)')
+        ax.set_title('Cancer Type Prevalence by Cohort')
 
         plt.yticks(rotation=0)
         plt.xticks(rotation=45, ha='right')
@@ -311,9 +311,9 @@ class CohortVisualizer:
                    label=cancer_type)
             bottom_vals += values
 
-        ax.set_xlabel('Cohort', fontweight='bold', labelpad=10)
-        ax.set_ylabel('Number of Records', fontweight='bold', labelpad=10)
-        ax.set_title('Cancer Type Distribution by Cohort', pad=15)
+        ax.set_xlabel('Cohort')
+        ax.set_ylabel('Number of Records')
+        ax.set_title('Cancer Type Distribution by Cohort')
         ax.set_xticks(range(len(stack_data)))
         ax.set_xticklabels(stack_data.index, rotation=45, ha='right')
 

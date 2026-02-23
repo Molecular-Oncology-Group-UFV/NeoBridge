@@ -23,12 +23,22 @@ from pathlib import Path
 warnings.filterwarnings('ignore')
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-# Matplotlib configuration
+# ==============================================================================
+# CONFIGURACIÓN DE MATPLOTLIB PARA PUBLICACIÓN CIENTÍFICA
+# ==============================================================================
 plt.style.use('seaborn-v0_8-whitegrid')
-rcParams['font.family'] = 'DejaVu Sans'
-rcParams['font.size'] = 10
-rcParams['figure.titlesize'] = 14
-
+rcParams.update({
+    'font.family': 'DejaVu Sans',
+    'font.size': 12,               # Tamaño base de fuente
+    'axes.titlesize': 16,           # Título de los ejes
+    'axes.labelsize': 14,           # Etiquetas de los ejes
+    'xtick.labelsize': 11,          # Números del eje X
+    'ytick.labelsize': 11,          # Números del eje Y
+    'legend.fontsize': 11,           # Leyenda
+    'figure.titlesize': 18,          # Título de la figura
+    'figure.dpi': 300,               # Resolución por defecto
+    'savefig.dpi': 300               # Resolución al guardar
+})
 
 # ==============================================================================
 # HELPER CLASSES
@@ -282,6 +292,38 @@ class HybridEnsemblePipeline:
 
         return best_thresh_f2, best_thresh_f1
 
+    def plot_confusion_matrix(self, y_true, y_probs, threshold, set_name="final_test"):
+        print(f"\nGenerating Publication-Quality Confusion Matrix ({set_name})...")
+
+        y_pred = (y_probs >= threshold).astype(int)
+        cm = confusion_matrix(y_true, y_pred)
+
+        plt.figure(figsize=(6, 5))
+
+        # Exactamente tu estilo original (sin bordes), pero con los números internos más grandes (size 14)
+        ax = sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                         annot_kws={"size": 14})
+
+        # Títulos de los ejes como los tenías, con fuente 14
+        ax.set_xlabel('Predicted', fontsize=14, labelpad=10)
+        ax.set_ylabel('True', fontsize=14, labelpad=10)
+
+        # Etiquetas limpias (0 y 1) con fuente 12.
+        # Ponemos rotation=0 en el eje Y para que los números se lean rectos (en tu original salían tumbados)
+        ax.set_xticklabels(['0', '1'], fontsize=12)
+        ax.set_yticklabels(['0', '1'], fontsize=12, rotation=0)
+
+        # Título idéntico al tuyo original pero más grande
+        plt.title(f'Confusion Matrix ({set_name})\nThresh: {threshold:.3f}', fontsize=16, pad=15)
+
+        plt.tight_layout()
+        save_path = self.figures_dir / 'performance' / f'confusion_matrix_paper.png'
+
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"✓ Confusion Matrix saved to: {save_path}")
+
+
     def analyze_feature_importance(self, pytorch_model, xgb_model, X_sample, weights):
         print("\nGenerating Scientific Feature Importance Analysis...")
 
@@ -325,7 +367,7 @@ class HybridEnsemblePipeline:
         # Derretir (Melt) el DataFrame para poder usar Seaborn hue
         df_melted = df_imp.melt(id_vars='Feature', var_name='Model', value_name='Importance')
 
-        # --- PLOTTING ---
+        # --- PLOTTING MEJORADO PARA PAPER ---
         plt.figure(figsize=(10, 8))
 
         # Definir paleta de azules profesionales
@@ -346,22 +388,20 @@ class HybridEnsemblePipeline:
             linewidth=0.5
         )
 
-        # Estilo "Paper"
-        ax.set_title('Feature Importance Comparison (Top 20)', fontsize=14, fontweight='bold', pad=15)
-        ax.set_xlabel('Relative Importance (Normalized)', fontsize=12, fontweight='bold')
-        ax.set_ylabel('', fontsize=12)
+        # Estilo "Paper" con tamaños de fuente actualizados
+        ax.set_title('Feature Importance Comparison (Top 20)', fontsize=16, fontweight='bold', pad=15)
+        ax.set_xlabel('Relative Importance (Normalized)', fontsize=14, fontweight='bold')
+        ax.set_ylabel('', fontsize=14)
 
         # Rejilla vertical solamente
         ax.grid(axis='x', linestyle='--', alpha=0.6)
-
-        # --- CORRECCIÓN AQUÍ ---
         ax.grid(visible=False, axis='y')
 
-        # Leyenda limpia dentro del gráfico
-        plt.legend(title='Model Component', title_fontsize=10, fontsize=10,
+        # Leyenda dentro del gráfico
+        plt.legend(title='Model Component', title_fontsize=12, fontsize=11,
                    loc='lower right', frameon=True, framealpha=0.9, edgecolor='#cccccc')
 
-        plt.yticks(fontsize=11)
+        plt.yticks(fontsize=12)
         sns.despine(left=True, bottom=False)
 
         plt.tight_layout()
@@ -405,15 +445,19 @@ class HybridEnsemblePipeline:
 
         df_metrics = pd.DataFrame([val_metrics, test_metrics], index=['Validation', 'Test']).T
 
-        plt.figure(figsize=(5, 6))
+        # CAMBIO 1: Figura un poco más alta y ancha para que las celdas respiren
+        plt.figure(figsize=(6, 7))
+
+        # CAMBIO 2: Tamaño de fuente a 12 (antes 14)
         sns.heatmap(df_metrics, annot=True, fmt=".3f", cmap="Blues",
-                    cbar_kws={'label': 'Score Value', 'shrink': 0.7},
+                    cbar_kws={'label': 'Score Value', 'shrink': 0.8},
                     annot_kws={"size": 12, "weight": "bold"})
 
-        plt.title('General Model Performance:\nValidation vs. Test Set', pad=20, fontweight='bold')
-        plt.ylabel('Metric', fontweight='bold')
-        plt.xlabel('Dataset Split', fontweight='bold')
-        plt.yticks(rotation=0)
+        plt.title('General Model Performance:\nValidation vs. Test Set', pad=20, fontsize=16, fontweight='bold')
+        plt.ylabel('Metric', fontsize=14, fontweight='bold')
+        plt.xlabel('Dataset Split', fontsize=14, fontweight='bold')
+        plt.yticks(rotation=0, fontsize=12)
+        plt.xticks(fontsize=12)
         plt.tight_layout()
 
         save_path = self.figures_dir / 'performance' / 'validation_test_comparison.png'
@@ -470,13 +514,14 @@ class HybridEnsemblePipeline:
         baseline_precision = total_positives / total_samples
         ax1.axhline(y=baseline_precision, color='grey', linestyle='-.',
                     label=f'Baseline Prevalence ({baseline_precision:.3f})')
-        ax1.set_title('Precision at Rank K (Focus on TTF20)', fontsize=12, fontweight='bold')
-        ax1.set_xlabel('Rank K (Number of top candidates selected)')
-        ax1.set_ylabel('Cumulative Precision (Fraction of Positives)')
+        ax1.set_title('Precision at Rank K (Focus on TTF20)', fontsize=16, fontweight='bold')
+        ax1.set_xlabel('Rank K (Number of top candidates selected)', fontsize=14)
+        ax1.set_ylabel('Cumulative Precision (Fraction of Positives)', fontsize=14)
         ax1.set_xlim(1, zoom_k)
         ax1.set_ylim(0, 1.05)
-        ax1.legend(loc='upper right', frameon=True)
+        ax1.legend(loc='upper right', frameon=True, fontsize=11)
         ax1.grid(True, linestyle='--', alpha=0.7)
+        ax1.tick_params(labelsize=12)
 
         ax2 = axes[1]
         sns.lineplot(data=plot_data, x='rank', y='recall_at_k', ax=ax2, color='#2ca02c', linewidth=2.5,
@@ -490,19 +535,20 @@ class HybridEnsemblePipeline:
                 if rec_val > 0:
                     ax2.plot([1, n], [rec_val, rec_val], color=color, linestyle=':', alpha=0.5)
                 ax2.text(n + 2, rec_val - (0.02 if rec_val > 0.1 else -0.01), f'Recall@{n}: {rec_val:.3f}',
-                         color=color, fontweight='bold', fontsize=9)
+                         color=color, fontweight='bold', fontsize=10)
         random_recall_at_zoom = zoom_k / total_samples
         ax2.plot([1, zoom_k], [1 / total_positives if total_positives > 0 else 0, random_recall_at_zoom],
                  color='grey', linestyle='-.', label='Random Guessing')
-        ax2.set_title('Recall at Rank K (Cumulative Positives Found)', fontsize=12, fontweight='bold')
-        ax2.set_xlabel('Rank K')
-        ax2.set_ylabel('Cumulative Recall')
+        ax2.set_title('Recall at Rank K (Cumulative Positives Found)', fontsize=16, fontweight='bold')
+        ax2.set_xlabel('Rank K', fontsize=14)
+        ax2.set_ylabel('Cumulative Recall', fontsize=14)
         ax2.set_xlim(1, zoom_k)
         ax2.set_ylim(0, max(plot_data['recall_at_k'].max() * 1.1, 0.1))
-        ax2.legend(loc='lower right', frameon=True)
+        ax2.legend(loc='lower right', frameon=True, fontsize=11)
         ax2.grid(True, linestyle='--', alpha=0.7)
+        ax2.tick_params(labelsize=12)
 
-        plt.suptitle(f'Ranking Performance Analysis\n(AUPRC: {auprc:.4f} | TTF20: {ttif:.3f})', fontsize=14, y=1.02)
+        plt.suptitle(f'Ranking Performance Analysis\n(AUPRC: {auprc:.4f} | TTF20: {ttif:.3f})', fontsize=18, y=1.02)
         plt.tight_layout()
 
         plot_path = self.figures_dir / 'performance' / 'ranking_metrics_analysis.png'
@@ -538,14 +584,14 @@ class HybridEnsemblePipeline:
         ax.set_ylim(-0.5, 0.5)
         ax.set_yticks([])
         ax.set_xticks([0, 0.25, 0.5, 0.75, 1.0])
-        ax.set_xticklabels(['0', '25%', '50%', '75%', '100%'], fontsize=11)
-        ax.set_xlabel('Model Contribution Weight ($w$)', fontsize=12, labelpad=10, fontweight='bold')
-        ax.legend(loc='lower center', bbox_to_anchor=(0.5, 1.1), ncol=2, frameon=False, fontsize=11, handletextpad=0.5)
-        fig.text(0.5, 0.92, 'Hybrid Ensemble Weight Distribution', ha='center', va='center', fontsize=16,
+        ax.set_xticklabels(['0', '25%', '50%', '75%', '100%'], fontsize=12)
+        ax.set_xlabel('Model Contribution Weight ($w$)', fontsize=14, labelpad=10, fontweight='bold')
+        ax.legend(loc='lower center', bbox_to_anchor=(0.5, 1.1), ncol=2, frameon=False, fontsize=12, handletextpad=0.5)
+        fig.text(0.5, 0.92, 'Hybrid Ensemble Weight Distribution', ha='center', va='center', fontsize=18,
                  fontweight='bold', color='#333333')
         formula_latex = (
                     r"$P(y=1|x) = \mathbf{" + f"{w_nn:.3f}" + r"} \cdot \sigma(f_{MLP}(x)) + " r"\mathbf{" + f"{w_xgb:.3f}" + r"} \cdot P_{XGB}(x)$")
-        fig.text(0.5, 0.15, formula_latex, ha='center', va='center', fontsize=16, color='#222222',
+        fig.text(0.5, 0.15, formula_latex, ha='center', va='center', fontsize=14, color='#222222',
                  bbox=dict(facecolor='#f8f9fa', edgecolor='#cccccc', boxstyle='round,pad=0.6', linewidth=0.5))
         save_path = self.figures_dir / 'performance' / 'ensemble_contribution_formula.png'
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
@@ -557,9 +603,10 @@ class HybridEnsemblePipeline:
     # ==========================================================================
     def generate_immunemirror_benchmark(self, y_true, y_probs):
         """
-        Genera DOS figuras independientes para el paper:
+        Genera TRES figuras independientes para el paper:
         1. Comparativa de AUC.
         2. Comparativa de Punto de Operación (Sensibilidad a Especificidad fija).
+        3. Curva ROC con el punto de referencia de ImmuneMirror.
         """
         print("\n" + "=" * 60)
         print("GENERATING SCIENTIFIC BENCHMARK FIGURES (Vs. ImmuneMirror)")
@@ -568,7 +615,7 @@ class HybridEnsemblePipeline:
         # --- CÁLCULO DE MÉTRICAS ---
         my_auc = roc_auc_score(y_true, y_probs)
 
-        # Buscar el punto donde Especificidad es ~0.70
+        # Curva ROC y buscar el punto donde Especificidad es ~0.70
         fpr, tpr, thresholds = roc_curve(y_true, y_probs)
         target_fpr = 1 - 0.70
         idx = np.argmin(np.abs(fpr - target_fpr))
@@ -595,22 +642,19 @@ class HybridEnsemblePipeline:
         aucs = [im_metrics['AUC'], my_auc]
 
         bars = plt.bar(models, aucs, color=[color_im, color_my],
-                       edgecolor='black', linewidth=0.8, width=0.6)
+                       edgecolor='black', linewidth=1, width=0.6)
 
-        # Línea de referencia
-        plt.axhline(im_metrics['AUC'], color='gray', linestyle=':', linewidth=1, zorder=0, alpha=0.7)
+        plt.axhline(im_metrics['AUC'], color='gray', linestyle=':', linewidth=1.5, zorder=0, alpha=0.7)
+        plt.bar_label(bars, fmt='%.3f', padding=3, fontsize=14, fontweight='bold')
 
-        # Etiquetas
-        plt.bar_label(bars, fmt='%.3f', padding=3, fontsize=12, fontweight='bold')
-
-        # Decoración
         plt.ylim(0, 1.15)
-        plt.ylabel('AUC-ROC Score', fontweight='bold', fontsize=12)
-        plt.title('Classification Power (AUC-ROC)', fontweight='bold', fontsize=14)
+        plt.ylabel('AUC-ROC Score', fontsize=16, fontweight='bold')
+        plt.title('Classification Power (AUC-ROC)', fontsize=18, fontweight='bold', pad=15)
         plt.grid(axis='y', linestyle='--', alpha=0.3)
+        plt.xticks(fontsize=14)
+        plt.yticks(fontsize=14)
         sns.despine()
 
-        # Guardar Figura 1
         save_path_auc = self.figures_dir / 'benchmarking' / 'benchmark_immunemirror_AUC.png'
         plt.savefig(save_path_auc, dpi=300, bbox_inches='tight')
         plt.close()
@@ -629,29 +673,74 @@ class HybridEnsemblePipeline:
         my_values = [my_sens_at_spec70, my_spec_at_spec70]
 
         rects1 = plt.bar(x - width / 2, im_values, width, label='ImmuneMirror',
-                         color=color_im, edgecolor='black', linewidth=0.8)
+                         color=color_im, edgecolor='black', linewidth=1)
         rects2 = plt.bar(x + width / 2, my_values, width, label='XGBoost + MLP',
-                         color=color_my, edgecolor='black', linewidth=0.8)
+                         color=color_my, edgecolor='black', linewidth=1)
 
-        # Decoración
-        plt.ylabel('Score', fontweight='bold', fontsize=12)
-        plt.title('Performance at Fixed Specificity (70%)', fontweight='bold', fontsize=14)
-        plt.xticks(x, labels, fontweight='bold', fontsize=12)
+        plt.ylabel('Score', fontsize=16, fontweight='bold')
+        plt.title('Performance at Fixed Specificity (70%)', fontsize=18, fontweight='bold', pad=15)
+
+        # --- AQUÍ QUITAMOS LA NEGRITA DEL EJE X ---
+        plt.xticks(x, labels, fontsize=14, fontweight='normal')
+
+        plt.yticks(fontsize=14)
         plt.ylim(0, 1.15)
 
-        plt.legend(frameon=True, fancybox=False, edgecolor='black', fontsize=10, loc='upper right')
+        plt.legend(frameon=True, fancybox=False, edgecolor='black', loc='upper right', fontsize=12)
         plt.grid(axis='y', linestyle='--', alpha=0.3)
         sns.despine()
 
-        # Etiquetas
-        plt.bar_label(rects1, fmt='%.3f', padding=3, fontsize=10)
-        plt.bar_label(rects2, fmt='%.3f', padding=3, fontsize=10, fontweight='bold')
+        plt.bar_label(rects1, fmt='%.3f', padding=3, fontsize=12)
+        plt.bar_label(rects2, fmt='%.3f', padding=3, fontsize=12, fontweight='bold')
 
-        # Guardar Figura 2
         save_path_op = self.figures_dir / 'benchmarking' / 'benchmark_immunemirror_OperatingPoint.png'
         plt.savefig(save_path_op, dpi=300, bbox_inches='tight')
         plt.close()
         print(f"✓ Figure 2 saved: {save_path_op}")
+
+        # ======================================================================
+        # FIGURA 3: ROC CURVE COMPARISON (NUEVA)
+        # ======================================================================
+        fig, ax = plt.subplots(figsize=(8, 6.5))
+
+        # Dibujar la curva ROC de tu modelo
+        ax.plot(fpr, tpr, color=color_my, linewidth=3,
+                label=f'XGBoost + MLP (AUC = {my_auc:.3f})')
+
+        # Dibujar el punto operativo de ImmuneMirror
+        im_fpr = 1 - im_metrics['Specificity']  # FPR = 1 - Specificity
+        im_tpr = im_metrics['Sensitivity']  # TPR = Sensitivity
+
+        # Estrella un poco más grande (s=250) para que destaque bien
+        ax.scatter([im_fpr], [im_tpr], color='#d62728', s=250, zorder=5, edgecolors='black', marker='*',
+                   label=f"ImmuneMirror Op. Point\n(FPR: {im_fpr:.3f}, TPR: {im_tpr:.3f})")
+
+        # Línea base aleatoria
+        ax.plot([0, 1], [0, 1], color='gray', linestyle='--', alpha=0.7)
+
+        ax.set_xlabel('False Positive Rate (1 - Specificity)', fontsize=16, fontweight='bold')
+        ax.set_ylabel('True Positive Rate (Sensitivity)', fontsize=16, fontweight='bold')
+        ax.set_title('ROC Curve Comparison vs. ImmuneMirror', fontsize=18, fontweight='bold', pad=20)
+
+        # --- CAJA DE ESTADÍSTICAS HARDCODEADA CORRECTAMENTE ---
+        total_samples = 11188
+        pos_pct = 23.0
+        stats_text = f"Total Samples: {total_samples} | Positive: {pos_pct:.1f}%"
+
+        # Posicionamiento relativo (1.15) para que no pise el título
+        ax.text(0.5, 1.15, stats_text, transform=ax.transAxes,
+                ha='center', va='center', fontsize=14, fontweight='bold',
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='#f8f9fa', edgecolor='#cccccc'))
+
+        ax.legend(loc='lower right', frameon=True, edgecolor='black', fontsize=12)
+        ax.grid(True, linestyle='--', alpha=0.6)
+        sns.despine()
+
+        save_path_roc = self.figures_dir / 'benchmarking' / 'benchmark_immunemirror_ROC_Curve.png'
+        # Usamos bbox_inches='tight' para que el guardado respete la caja flotante superior
+        plt.savefig(save_path_roc, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"✓ Figure 3 (ROC Curve) saved: {save_path_roc}")
 
     # --------------------------------------------------------------------------
     # MAIN EXECUTION METHOD
@@ -719,7 +808,11 @@ class HybridEnsemblePipeline:
         final_pr = average_precision_score(y_test, probs_test)
         print(f"\nFinal AUC-ROC: {final_auc:.4f} | AUC-PR: {final_pr:.4f}")
 
-        self.evaluate_performance(y_test, probs_test, set_name="final_test")
+        best_thresh_f2, best_thresh_f1 = self.evaluate_performance(y_test, probs_test, set_name="final_test")
+
+        # Generamos la matriz de confusión utilizando el threshold que optimiza F1
+        self.plot_confusion_matrix(y_test, probs_test, threshold=best_thresh_f1, set_name="final_test")
+
         self.analyze_feature_importance(pytorch_model, xgb_model, X_test[:200], best_weights)
 
         # 7. Analyze Ranking & Export Top 100

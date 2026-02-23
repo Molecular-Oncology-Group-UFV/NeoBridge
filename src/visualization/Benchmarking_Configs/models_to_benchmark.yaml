@@ -2,7 +2,7 @@
 # Lista ampliada de modelos - SIN OVERSAMPLING
 
 dataset:
-  path: "data/processed/dataset_80_20_normalized_tcr.csv"
+  path: "data/processed/dataset_80_20_normalized_tcr_with_cohort_and_rank.csv"
   target_column: "immunogenicity"
   test_size: 0.2
   random_state: 42
