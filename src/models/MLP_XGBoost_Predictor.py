@@ -453,7 +453,7 @@ class HybridEnsemblePipeline:
                     cbar_kws={'label': 'Score Value', 'shrink': 0.8},
                     annot_kws={"size": 12, "weight": "bold"})
 
-        plt.title('General Model Performance:\nValidation vs. Test Set', pad=20, fontsize=16, fontweight='bold')
+        plt.title('NeoBridge Performance:\nValidation vs. Test Set', pad=20, fontsize=16, fontweight='bold')
         plt.ylabel('Metric', fontsize=14, fontweight='bold')
         plt.xlabel('Dataset Split', fontsize=14, fontweight='bold')
         plt.yticks(rotation=0, fontsize=12)
@@ -623,7 +623,7 @@ class HybridEnsemblePipeline:
         my_sens_at_spec70 = tpr[idx]
         my_spec_at_spec70 = 1 - fpr[idx]
 
-        print(f"Hybrid Ensemble AUC: {my_auc:.3f}")
+        print(f"NeoBridge AUC: {my_auc:.3f}")
         print(f"At Specificity {my_spec_at_spec70:.3f}: Sensitivity = {my_sens_at_spec70:.3f}")
 
         # Datos de ImmuneMirror
@@ -638,7 +638,7 @@ class HybridEnsemblePipeline:
         # ======================================================================
         plt.figure(figsize=(6, 6))
 
-        models = ['ImmuneMirror (RF)', 'XGBoost + MLP (Ours)']
+        models = ['ImmuneMirror (RF)', 'NeoBridge']
         aucs = [im_metrics['AUC'], my_auc]
 
         bars = plt.bar(models, aucs, color=[color_im, color_my],
@@ -674,7 +674,7 @@ class HybridEnsemblePipeline:
 
         rects1 = plt.bar(x - width / 2, im_values, width, label='ImmuneMirror',
                          color=color_im, edgecolor='black', linewidth=1)
-        rects2 = plt.bar(x + width / 2, my_values, width, label='XGBoost + MLP',
+        rects2 = plt.bar(x + width / 2, my_values, width, label='NeoBridge',
                          color=color_my, edgecolor='black', linewidth=1)
 
         plt.ylabel('Score', fontsize=16, fontweight='bold')
@@ -705,7 +705,7 @@ class HybridEnsemblePipeline:
 
         # Dibujar la curva ROC de tu modelo
         ax.plot(fpr, tpr, color=color_my, linewidth=3,
-                label=f'XGBoost + MLP (AUC = {my_auc:.3f})')
+                label=f'NeoBridge (AUC = {my_auc:.3f})')
 
         # Dibujar el punto operativo de ImmuneMirror
         im_fpr = 1 - im_metrics['Specificity']  # FPR = 1 - Specificity
@@ -830,7 +830,7 @@ class HybridEnsemblePipeline:
 
 
 def main():
-    print("HYBRID ENSEMBLE PIPELINE (GENERAL MODEL - PRODUCTION)")
+    print("NeoBridge ENSEMBLE PIPELINE (GENERAL MODEL - PRODUCTION)")
     print("=" * 60)
 
     # 1. Configurar Métrica

@@ -112,25 +112,25 @@ class GeneralizationBenchmark:
                 'folder': 'melanoma',
                 'train': 'dataset_80_20_no_melanoma.csv',
                 'test': 'dataset_80_20_only_melanoma.csv',
-                'title': 'Melanoma Cohort'
+                'title': 'Melanoma'
             },
             'pancreas': {
                 'folder': 'pancreas',
                 'train': 'dataset_80_20_no_pancreas.csv',
                 'test': 'dataset_only_pancreas.csv',
-                'title': 'Pancreatic Cancer Cohort'
+                'title': 'Pancreatic Cancer'
             },
             'lung': {
                 'folder': 'pulmon',
                 'train': 'dataset_80_20_no_lung.csv',
                 'test': 'dataset_only_lung.csv',
-                'title': 'Lung Cancer Cohort'
+                'title': 'Lung Cancer'
             },
             'minor_cancers': {
                 'folder': 'multiples_minoritarios',
                 'train': 'dataset_80_20_major_cancers.csv',
                 'test': 'dataset_80_20_minor_cancers.csv',
-                'title': 'Minor Cancers Cohort'
+                'title': 'Minor Cancers'
             }
         }
 
@@ -222,6 +222,56 @@ class GeneralizationBenchmark:
 
         return model_mlp, model_xgb
 
+    def plot_size_matched_analysis(self, full_data_metrics, size_matched_metrics):
+        """Genera la figura con boxplots y la estrella roja para el baseline"""
+        print("\n[INFO] Generando visualización de Size-Matched Sensitivity...")
+
+        df_sm = pd.DataFrame(size_matched_metrics)
+        df_fd = pd.DataFrame(full_data_metrics)
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        fig.suptitle('Size-Matched Sensitivity Analysis (Cancer Hold-Out)', y=1.05, fontweight='bold', fontsize=18)
+
+        # 1. FIJAR EL ORDEN
+        orden_categorias = df_fd['Cancer_Holdout'].unique()
+
+        # Plot: AUPRC Distribution Out-of-Sample
+        sns.boxplot(x='Cancer_Holdout', y='AUPRC', data=df_sm, ax=ax, color='lightblue',
+                    showfliers=False, order=orden_categorias)
+        sns.stripplot(x='Cancer_Holdout', y='AUPRC', data=df_sm, ax=ax, color='blue',
+                      alpha=0.4, jitter=True, order=orden_categorias)
+
+        # Añadir estrellas rojas para el Full Data original
+        for i, cancer in enumerate(orden_categorias):
+            val = df_fd[df_fd['Cancer_Holdout'] == cancer]['AUPRC'].values[0]
+            ax.plot(i, val, marker='*', color='red', markersize=18, markeredgecolor='black',
+                    label='Full Data Baseline' if i == 0 else "")
+            ax.hlines(val, i - 0.4, i + 0.4, colors='red', linestyles='dashed', alpha=0.6)
+
+        ax.set_title('Out-of-Sample AUPRC: Full Data vs N-Matched', pad=15)
+        ax.set_ylabel('AUPRC Score', fontweight='bold')
+        ax.set_xlabel('Held-out Cancer Type', fontweight='bold', labelpad=15) # labelpad da un poco de aire al título del eje
+
+        # ==========================================
+        # SOLUCIÓN DE SUPERPOSICIÓN AQUÍ
+        # ==========================================
+        # Inclinamos el texto 30-45 grados y lo alineamos a la derecha
+        plt.xticks(rotation=30, ha='right', fontsize=13)
+
+        # Evitar leyenda duplicada
+        handles, labels = ax.get_legend_handles_labels()
+        by_label = dict(zip(labels, handles))
+        ax.legend(by_label.values(), by_label.keys(), loc='best', frameon=True, edgecolor='black')
+
+        plt.tight_layout()
+
+        # Guardamos la figura
+        self.base_figs_dir.mkdir(parents=True, exist_ok=True)
+        save_path = self.base_figs_dir / 'Cancer_Size_Matched_Analysis.png'
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"✓ Guardada nueva gráfica en: {save_path}")
+
     def save_plots(self, val_y, val_probs, test_y, test_probs, output_dir, cancer_title):
         """Generates and saves publication-quality ROC and Confusion Matrix plots."""
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -249,7 +299,6 @@ class GeneralizationBenchmark:
         ax.set_ylabel('True Positive Rate')
         ax.set_title(f'ROC Curve: Generalization to {cancer_title}', pad=20)
 
-        # Caja de estadísticas superior
         total_samples = len(test_y)
         pos_pct = (sum(test_y) / total_samples) * 100
         stats_text = f"Total Samples: {total_samples} | Positive: {pos_pct:.1f}%"
@@ -297,72 +346,122 @@ class GeneralizationBenchmark:
 
     def run_all(self):
         print("=" * 60)
-        print("STARTING GENERALIZATION BENCHMARK")
+        print("STARTING GENERALIZATION BENCHMARK WITH SIZE-MATCHING")
         print("=" * 60)
 
-        summary = []
+        summary_full_data = []
+        summary_size_matched = []
+
+        # 1. Calcular el N mínimo (Size-Matching target)
+        min_train_size = float('inf')
+        datasets_cache = {}
 
         for key, config in self.experiments_config.items():
-            print(f"\n[+] Processing Cohort: {config['title']}")
+            df_train, df_test = self.load_data(config)
+            if df_train is not None:
+                datasets_cache[key] = (df_train, df_test)
+                if len(df_train) < min_train_size:
+                    min_train_size = len(df_train)
 
-            # Data Loading
-            df_train_full, df_test = self.load_data(config)
-            if df_train_full is None: continue
+        target_train_size = int(min_train_size * 0.95)
+        n_iterations = 20  # Puedes subir esto a 50 o 100 luego si quieres más puntos azules
+        print(f"[INFO] N óptimo para Size-Matching: {target_train_size} muestras.")
 
-            X_train_raw, y_train_full = self.prepare_features(df_train_full)
+        # 2. Bucle de experimentos
+        for key, config in self.experiments_config.items():
+            if key not in datasets_cache: continue
+
+            print(f"\n>>> Processing Hold-out Cancer: {config['title']}")
+            df_train_full, df_test = datasets_cache[key]
+
+            # Preparar arrays base
             X_test_raw, y_test = self.prepare_features(df_test)
+            X_train_raw_full, y_train_full = self.prepare_features(df_train_full)
 
-            # Standardization
-            scaler = StandardScaler()
-            X_train_scaled = scaler.fit_transform(X_train_raw)
-            X_test_scaled = scaler.transform(X_test_raw)
+            # ==========================================================
+            # FASE A: FULL DATA (El entrenamiento REAL para la estrella roja)
+            # ==========================================================
+            print("    [!] Calculando Baseline Full Data REAL...")
+            scaler_full = StandardScaler()
+            # Fitteamos SOLO en el train, transformamos el test (CORREGIDO)
+            X_train_scaled_full = scaler_full.fit_transform(X_train_raw_full)
+            X_test_scaled_full = scaler_full.transform(X_test_raw)
 
-            # Internal Validation Split
-            skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-            t_idx, v_idx = next(skf.split(X_train_scaled, y_train_full))
-            X_train, y_train = X_train_scaled[t_idx], y_train_full[t_idx]
-            X_val, y_val = X_train_scaled[v_idx], y_train_full[v_idx]
+            # Entrenamos los modelos con todos los datos disponibles
+            skf_f = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+            t_idx_f, v_idx_f = next(skf_f.split(X_train_scaled_full, y_train_full))
 
-            print("    Running hyperparameter optimization...")
-            mlp_cfg = self.fast_optimize_mlp(X_train, y_train, X_val, y_val)
-            mlp_model, xgb_model = self.train_final_models(X_train, y_train, X_val, y_val, mlp_cfg)
+            mlp_cfg_full = self.fast_optimize_mlp(X_train_scaled_full[t_idx_f], y_train_full[t_idx_f],
+                                                  X_train_scaled_full[v_idx_f], y_train_full[v_idx_f])
 
-            # Ensemble Weight Optimization
-            ensemble = HybridEnsemble(mlp_model, xgb_model, self.device)
-            best_w, best_ap = (0.5, 0.5), 0
-            for w in [(0.2, 0.8), (0.5, 0.5), (0.8, 0.2)]:
-                probs, _, _ = ensemble.predict_proba(X_val, w)
-                ap = average_precision_score(y_val, probs)
-                if ap > best_ap: best_w = w
+            mlp_full, xgb_full = self.train_final_models(X_train_scaled_full, y_train_full,
+                                                         X_train_scaled_full[v_idx_f], y_train_full[v_idx_f],
+                                                         mlp_cfg_full)
 
-            print(f"    Optimal Ensemble Weights: MLP={best_w[0]}, XGB={best_w[1]}")
+            ens_full = HybridEnsemble(mlp_full, xgb_full, self.device)
+            test_probs_full, _, _ = ens_full.predict_proba(X_test_scaled_full)
 
-            # Final Predictions
-            val_probs, _, _ = ensemble.predict_proba(X_val, best_w)
-            test_probs, _, _ = ensemble.predict_proba(X_test_scaled, best_w)
+            # Sacamos el AUPRC de verdad
+            ap_full = average_precision_score(y_test, test_probs_full)
+            print(f"        -> AUPRC Full Data: {ap_full:.4f}")
 
-            # Save Artifacts
-            out_dir = self.base_figs_dir / key
-            print(f"    Saving figures to: {out_dir}")
-            self.save_plots(y_val, val_probs, y_test, test_probs, out_dir, config['title'])
-
-            auc = roc_auc_score(y_test, test_probs)
-            ap = average_precision_score(y_test, test_probs)
-            summary.append({
-                'Experiment': key,
-                'AUC': auc,
-                'AP': ap,
-                'N_Test_Samples': len(y_test)
+            summary_full_data.append({
+                'Cancer_Holdout': config['title'],
+                'AUPRC': ap_full
             })
-            print(f"    ✓ Complete. AUC: {auc:.4f} | AP: {ap:.4f}")
 
-        # Save Summary Report
-        self.base_reports_dir.mkdir(parents=True, exist_ok=True)
-        csv_path = self.base_reports_dir / 'generalization_summary.csv'
-        pd.DataFrame(summary).to_csv(csv_path, index=False)
+            # ==========================================================
+            # FASE B: SIZE-MATCHED ANALYSIS
+            # ==========================================================
+            train_pos_ratio = df_train_full['immunogenicity'].mean()
+            pool_pos = df_train_full[df_train_full['immunogenicity'] == 1]
+            pool_neg = df_train_full[df_train_full['immunogenicity'] == 0]
 
-        print("\n" + "=" * 60)
-        print(f"BENCHMARK COMPLETED. Summary saved to: {csv_path}")
+            n_pos_target = int(target_train_size * train_pos_ratio)
+            n_neg_target = target_train_size - n_pos_target
+
+            print(f"    [!] Ejecutando {n_iterations} iteraciones Size-Matched (N={target_train_size})...")
+
+            for i in range(n_iterations):
+                sample_pos = pool_pos.sample(n=n_pos_target, replace=False, random_state=i)
+                sample_neg = pool_neg.sample(n=n_neg_target, replace=False, random_state=i + 100)
+                df_matched = pd.concat([sample_pos, sample_neg]).sample(frac=1, random_state=i)
+
+                X_match_raw, y_match = self.prepare_features(df_matched)
+
+                # --- Pipeline: Escalar y Entrenar ---
+                scaler_sm = StandardScaler()
+                X_match_scaled = scaler_sm.fit_transform(X_match_raw)
+                X_test_scaled_sm = scaler_sm.transform(X_test_raw)
+
+                skf_sm = StratifiedKFold(n_splits=5, shuffle=True, random_state=i)
+                t_idx_m, v_idx_m = next(skf_sm.split(X_match_scaled, y_match))
+
+                mlp_cfg_sm = self.fast_optimize_mlp(X_match_scaled[t_idx_m], y_match[t_idx_m],
+                                                    X_match_scaled[v_idx_m], y_match[v_idx_m])
+
+                mlp_sm, xgb_sm = self.train_final_models(X_match_scaled, y_match,
+                                                         X_match_scaled[v_idx_m], y_match[v_idx_m], mlp_cfg_sm)
+
+                ens_sm = HybridEnsemble(mlp_sm, xgb_sm, self.device)
+                test_probs_sm, _, _ = ens_sm.predict_proba(X_test_scaled_sm)
+
+                ap_out = average_precision_score(y_test, test_probs_sm)
+
+                summary_size_matched.append({
+                    'Cancer_Holdout': config['title'],
+                    'Iteration': i,
+                    'AUPRC': ap_out
+                })
+
+        # ==========================================================
+        # 3. GENERAR EL GRÁFICO FINAL
+        # ==========================================================
+        self.plot_size_matched_analysis(summary_full_data, summary_size_matched)
+
+        # Guardar CSVs
+        pd.DataFrame(summary_size_matched).to_csv(self.base_reports_dir / 'cancer_size_matched.csv', index=False)
+        print("\n[INFO] Benchmark de Cáncer Size-Matched Completado")
 
 
 if __name__ == "__main__":

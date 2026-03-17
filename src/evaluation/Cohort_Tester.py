@@ -125,17 +125,18 @@ class CohortGeneralizationBenchmark:
         y = df['immunogenicity'].values
         return X, y
 
-    def fast_optimize_mlp(self, X_train, y_train, X_val, y_val, pos_weight, n_trials=10):
+    def fast_optimize_mlp(self, X_train, y_train, X_val, y_val, pos_weight, n_trials=10, dropout_rate=0.3):
         X_t = torch.tensor(X_train, dtype=torch.float32).to(self.device)
         y_t = torch.tensor(y_train, dtype=torch.float32).view(-1, 1).to(self.device)
         weight_tensor = torch.tensor([pos_weight]).to(self.device)
 
         def objective(trial):
             n_layers = trial.suggest_int('n_layers', 2, 3)
-            dims = [trial.suggest_int(f'd{i}', 64, 256) for i in range(n_layers)]
+            # Limitamos dimensiones para evitar overfitting en sets pequeños
+            dims = [trial.suggest_int(f'd{i}', 32, 128) for i in range(n_layers)]
             lr = trial.suggest_float('lr', 1e-4, 1e-2, log=True)
 
-            model = ImprovedMLP(X_train.shape[1], dims, 0.3).to(self.device)
+            model = ImprovedMLP(X_train.shape[1], dims, dropout_rate).to(self.device)
             opt = optim.Adam(model.parameters(), lr=lr)
             crit = nn.BCEWithLogitsLoss(pos_weight=weight_tensor)
 
@@ -183,6 +184,40 @@ class CohortGeneralizationBenchmark:
         model_xgb = xgb.XGBClassifier(
             n_estimators=150, max_depth=6, learning_rate=0.05,
             scale_pos_weight=pos_weight, eval_metric='logloss', verbosity=0
+        )
+        model_xgb.fit(X_train, y_train)
+
+        return model_mlp, model_xgb
+
+    def train_final_models_regularized(self, X_train, y_train, mlp_cfg, pos_weight):
+        """Versión fuertemente regularizada para el análisis size-matched"""
+        # Aumentamos el dropout
+        model_mlp = ImprovedMLP(X_train.shape[1], mlp_cfg['dims'], dropout_rate=0.5).to(self.device)
+        # Añadimos weight decay (L2 penalty) al optimizador
+        optimizer = optim.Adam(model_mlp.parameters(), lr=mlp_cfg['lr'], weight_decay=1e-4)
+        criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight]).to(self.device))
+        X_t = torch.tensor(X_train, dtype=torch.float32).to(self.device)
+        y_t = torch.tensor(y_train, dtype=torch.float32).view(-1, 1).to(self.device)
+
+        for _ in range(50):
+            model_mlp.train()
+            optimizer.zero_grad()
+            loss = criterion(model_mlp(X_t), y_t)
+            loss.backward()
+            optimizer.step()
+
+        # Regularización estricta para XGBoost
+        model_xgb = xgb.XGBClassifier(
+            n_estimators=100, # Reducido
+            max_depth=4,      # Árboles menos profundos
+            learning_rate=0.03, # Aprendizaje más lento
+            subsample=0.8,    # Muestreo estocástico
+            colsample_bytree=0.8, # Muestreo de características
+            reg_alpha=0.5,    # Regularización L1
+            reg_lambda=1.5,   # Regularización L2
+            scale_pos_weight=pos_weight,
+            eval_metric='logloss',
+            verbosity=0
         )
         model_xgb.fit(X_train, y_train)
 
@@ -283,7 +318,7 @@ class CohortGeneralizationBenchmark:
 
         def plot_individual_metric(metric_name, my_val, nr_val, title, filename):
             plt.figure(figsize=(6, 6))
-            x = ['NeoRanking\n(Benchmark)', 'Hybrid Ensemble\n(Mean)']
+            x = ['NeoRanking\n(Benchmark)', 'NeoBridge\n(Mean)']
             y = [nr_val, my_val]
             bars = plt.bar(x, y, color=[color_nr, color_my], edgecolor='black', width=0.6, linewidth=1)
             plt.axhline(nr_val, color='gray', linestyle=':', linewidth=1.5, zorder=0)
@@ -304,7 +339,7 @@ class CohortGeneralizationBenchmark:
 
         fig, ax = plt.subplots(figsize=(8, 6.5))
         prec, rec, _ = precision_recall_curve(y_true_all, y_probs_all)
-        ax.plot(rec, prec, color=color_my, linewidth=3, label=f'XGBoost + MLP (Mean AUPRC = {my_mean_auprc:.3f})')
+        ax.plot(rec, prec, color=color_my, linewidth=3, label=f'NeoBridge (Mean AUPRC = {my_mean_auprc:.3f})')
         ax.axhline(nr_metrics['AUPRC'], color='#d62728', linestyle='--', linewidth=2.5,
                    label=f"NeoRanking Baseline (AUPRC = {nr_metrics['AUPRC']:.3f})")
         ax.set_xlabel('Recall (Sensitivity)', fontsize=16, fontweight='bold')
@@ -442,13 +477,15 @@ class CohortGeneralizationBenchmark:
 
                 t_idx_m, v_idx_m = next(skf.split(X_match_scaled, y_match))
 
+                # Ajuste: Aumentamos el dropout rate también durante la optimización
                 m_cfg = self.fast_optimize_mlp(
                     X_match_scaled[t_idx_m], y_match[t_idx_m],
                     X_match_scaled[v_idx_m], y_match[v_idx_m],
-                    pos_weight, n_trials=3
+                    pos_weight, n_trials=3, dropout_rate=0.5
                 )
 
-                m_mlp, m_xgb = self.train_final_models(X_match_scaled, y_match, m_cfg, pos_weight)
+                # Ajuste: Usamos el entrenamiento regularizado para el tamaño de 3000
+                m_mlp, m_xgb = self.train_final_models_regularized(X_match_scaled, y_match, m_cfg, pos_weight)
                 ens_match = HybridEnsemble(m_mlp, m_xgb, self.device)
                 bw_match = self.optimize_weights_optuna(ens_match, X_match_scaled[v_idx_m], y_match[v_idx_m],
                                                         n_trials=5)
