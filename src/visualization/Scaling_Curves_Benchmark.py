@@ -501,9 +501,18 @@ class ScalingCurveBenchmark:
             ax.text(x_data[-1], popt[0] + 0.005, f"Limit: {popt[0]:.3f}",
                     color=color_fit, fontsize=9, fontweight='bold', va='bottom', ha='right')
 
-        # --- MEJORA DEL EJE X (TODOS LOS PUNTOS) ---
-        ax.set_xticks(results_df['data_size'])
-        ax.set_xticklabels(results_df['data_size'], rotation=45, fontsize=9)
+        # --- MEJORA DEL EJE X (EVITAR SUPERPOSICIÓN AL FINAL) ---
+        xticks = results_df['data_size'].tolist()
+
+        # Si los dos últimos ticks están a menos de 300 muestras de distancia,
+        # quitamos el penúltimo solo de las etiquetas (el punto se sigue graficando)
+        if len(xticks) >= 2 and (xticks[-1] - xticks[-2] < 300):
+            ticks_to_show = xticks[:-2] + [xticks[-1]]
+        else:
+            ticks_to_show = xticks
+
+        ax.set_xticks(ticks_to_show)
+        ax.set_xticklabels(ticks_to_show, rotation=45, fontsize=9)
 
         # Estética General
         ax.set_xlabel('Training Set Size (Samples)', fontweight='bold', fontsize=11)

@@ -121,7 +121,7 @@ class HybridEnsemblePipeline:
         for d in [self.models_dir, self.reports_dir, self.figures_dir]:
             d.mkdir(parents=True, exist_ok=True)
 
-        for sub in ['optuna', 'performance', 'feature_importance', 'elispot_candidates', 'benchmarking']:
+        for sub in ['optuna', 'performance', 'feature_importance', 'elispot_candidates', 'benchmarking', 'eda']:
             (self.reports_dir / sub).mkdir(exist_ok=True)
             (self.figures_dir / sub).mkdir(exist_ok=True)
 
@@ -137,7 +137,7 @@ class HybridEnsemblePipeline:
 
         # We keep the raw DataFrame to recover metadata later (peptide sequences, etc.)
         features_to_drop = ['immunogenicity', 'mut_is_binding_pos', 'bestWTMatchType_I',
-                            'DAI_MixMHC_mbp', 'mutant_rank']
+                            'DAI_MixMHC_mbp', 'mutant_rank', 'hydrophobicity_avg_diff']
 
         # Select numeric features for training
         X_df = df.select_dtypes(include=['float64', 'int64']).drop(columns=features_to_drop, errors='ignore')
@@ -148,6 +148,49 @@ class HybridEnsemblePipeline:
         self.feature_names = X_df.columns.tolist()
 
         return df, X, y
+
+    def plot_feature_correlation(self, X, feature_names):
+        print("\n" + "=" * 60)
+        print("GENERATING FEATURE CORRELATION ANALYSIS")
+        print("=" * 60)
+
+        # Crear DataFrame temporal con las variables de entrenamiento
+        df_features = pd.DataFrame(X, columns=feature_names)
+
+        # Calcular correlación de Pearson (usa 'spearman' si prefieres correlación por rangos)
+        corr_matrix = df_features.corr(method='pearson')
+
+        # Configurar el tamaño de la figura dependiendo del número de variables
+        fig_size = max(10, len(feature_names) * 0.4)
+        plt.figure(figsize=(fig_size, fig_size * 0.8))
+
+        # Crear máscara para el triángulo superior (formato típico en papers)
+        mask = np.triu(np.ones_like(corr_matrix, dtype=bool))
+
+        # Paleta divergente: azul para positiva, rojo para negativa (o viceversa)
+        cmap = sns.diverging_palette(230, 20, as_cmap=True)
+
+        # Dibujar el heatmap. Si tienes menos de 15 variables, puedes poner annot=True
+        sns.heatmap(corr_matrix, mask=mask, cmap=cmap, vmax=1.0, vmin=-1.0, center=0,
+                    square=True, linewidths=.5, cbar_kws={"shrink": .75},
+                    annot=False, fmt=".2f")
+
+        plt.title('Feature Correlation Matrix', fontsize=18, fontweight='bold', pad=20)
+        plt.xticks(rotation=45, ha='right', fontsize=11)
+        plt.yticks(fontsize=11)
+
+        plt.tight_layout()
+
+        # Guardar resultados
+        save_path_plot = self.figures_dir / 'eda' / 'feature_correlation_matrix.png'
+        save_path_csv = self.reports_dir / 'eda' / 'feature_correlation_matrix.csv'
+
+        plt.savefig(save_path_plot, dpi=300, bbox_inches='tight')
+        plt.close()
+        corr_matrix.to_csv(save_path_csv)
+
+        print(f"✓ Correlation Matrix plot saved to: {save_path_plot}")
+        print(f"✓ Correlation CSV saved to: {save_path_csv}")
 
     # --------------------------------------------------------------------------
     # TRAINING HELPERS
@@ -749,6 +792,9 @@ class HybridEnsemblePipeline:
     def run(self, n_trials_pytorch, n_trials_xgb, n_trials_ensemble, metric, use_cv):
         # 1. Load Data
         df, X, y = self.load_data()
+
+        # --- NUEVO: Análisis de Correlación ---
+        self.plot_feature_correlation(X, self.feature_names)
 
         # 2. Strict Hold-out Test Set (20%)
         # Pass full DF to split to keep metadata

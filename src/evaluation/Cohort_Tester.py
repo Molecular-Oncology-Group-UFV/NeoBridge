@@ -16,6 +16,8 @@ from matplotlib import rcParams
 from pathlib import Path
 import optuna
 import warnings
+from sklearn.utils import resample
+from scipy.stats import norm
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -132,7 +134,6 @@ class CohortGeneralizationBenchmark:
 
         def objective(trial):
             n_layers = trial.suggest_int('n_layers', 2, 3)
-            # Limitamos dimensiones para evitar overfitting en sets pequeños
             dims = [trial.suggest_int(f'd{i}', 32, 128) for i in range(n_layers)]
             lr = trial.suggest_float('lr', 1e-4, 1e-2, log=True)
 
@@ -190,10 +191,7 @@ class CohortGeneralizationBenchmark:
         return model_mlp, model_xgb
 
     def train_final_models_regularized(self, X_train, y_train, mlp_cfg, pos_weight):
-        """Versión fuertemente regularizada para el análisis size-matched"""
-        # Aumentamos el dropout
         model_mlp = ImprovedMLP(X_train.shape[1], mlp_cfg['dims'], dropout_rate=0.5).to(self.device)
-        # Añadimos weight decay (L2 penalty) al optimizador
         optimizer = optim.Adam(model_mlp.parameters(), lr=mlp_cfg['lr'], weight_decay=1e-4)
         criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight]).to(self.device))
         X_t = torch.tensor(X_train, dtype=torch.float32).to(self.device)
@@ -206,15 +204,14 @@ class CohortGeneralizationBenchmark:
             loss.backward()
             optimizer.step()
 
-        # Regularización estricta para XGBoost
         model_xgb = xgb.XGBClassifier(
-            n_estimators=100, # Reducido
-            max_depth=4,      # Árboles menos profundos
-            learning_rate=0.03, # Aprendizaje más lento
-            subsample=0.8,    # Muestreo estocástico
-            colsample_bytree=0.8, # Muestreo de características
-            reg_alpha=0.5,    # Regularización L1
-            reg_lambda=1.5,   # Regularización L2
+            n_estimators=100,
+            max_depth=4,
+            learning_rate=0.03,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_alpha=0.5,
+            reg_lambda=1.5,
             scale_pos_weight=pos_weight,
             eval_metric='logloss',
             verbosity=0
@@ -223,11 +220,7 @@ class CohortGeneralizationBenchmark:
 
         return model_mlp, model_xgb
 
-    # ==========================================================================
-    # EXTENDED METRICS
-    # ==========================================================================
     def calculate_extended_metrics(self, y_true, y_probs):
-        """Calcula todas las métricas solicitadas (AUROC, AUPRC, F1, PPV, Sens, Brier)"""
         if len(np.unique(y_true)) < 2:
             return {k: 0.0 for k in ['AUROC', 'AUPRC', 'F1', 'PPV', 'Sensitivity', 'Brier']}
 
@@ -248,40 +241,105 @@ class CohortGeneralizationBenchmark:
             'Brier': brier
         }
 
-    # ==========================================================================
-    # ORIGINAL PLOTTING & METRICS (Kept intact)
-    # ==========================================================================
-    def analyze_ranking_performance(self, y_true, y_probs, cohort_name):
+    def analyze_ranking_performance(self, y_true, y_probs, cohort_name, n_bootstraps=5000):
         df = pd.DataFrame({'target': y_true, 'prob': y_probs})
         df = df.sort_values(by='prob', ascending=False).reset_index(drop=True)
-        df['rank'] = df.index + 1
 
         total_positives = df['target'].sum()
+        baseline_prevalence = total_positives / len(y_true) if len(y_true) > 0 else 1e-6
+
+        # Devuelve un array vacío para evitar errores si no hay positivos
         if total_positives == 0:
-            return {'TTF20': 0, 'TTF50': 0, 'TTF100': 0, 'FR': 0, 'Total_Positives': 0}, df
+            return {'TTF50': 0, 'TTF50_lower': 0, 'TTF50_upper': 0, 'Enrichment': 0,
+                    'Enrichment_lower': 0, 'Enrichment_upper': 0}, df, np.array([0])
 
-        df['cumsum_pos'] = df['target'].cumsum()
-        df['precision_at_k'] = df['cumsum_pos'] / df['rank']
-        df['recall_at_k'] = df['cumsum_pos'] / total_positives
+        ttf50_point = df.head(50)['target'].mean() if len(df) >= 50 else df['target'].mean()
+        enrichment_point = ttf50_point / baseline_prevalence
 
-        def get_metric_at_k(dataframe, k, metric_col):
-            if len(dataframe) >= k:
-                return dataframe.loc[k - 1, metric_col]
+        print(f"      [~] Stratified Bootstrapping BCa CIs for {cohort_name} (n={n_bootstraps})...")
+        boot_ttf50 = []
+        indices = np.arange(len(y_true))
+
+        # 1. Stratified Bootstrap
+        for _ in range(n_bootstraps):
+            boot_idx = resample(indices, replace=True, n_samples=len(y_true), stratify=y_true)
+            boot_target = y_true[boot_idx]
+            boot_prob = y_probs[boot_idx]
+
+            sort_idx = np.argsort(boot_prob)[::-1]
+            boot_target_sorted = boot_target[sort_idx]
+
+            t50 = boot_target_sorted[:50].mean() if len(boot_target_sorted) >= 50 else boot_target_sorted.mean()
+            boot_ttf50.append(t50)
+
+        boot_ttf50 = np.array(boot_ttf50)
+        boot_enrichment = boot_ttf50 / baseline_prevalence  # DISTRIBUCIÓN
+
+        # 2. Jackknife O(N)
+        N = len(y_true)
+        jack_ttf50 = np.zeros(N)
+        jack_enrichment = np.zeros(N)
+        baseline_sum = np.sum(y_true)
+
+        sort_idx_jack = np.argsort(y_probs)[::-1]
+        y_true_sorted = y_true[sort_idx_jack]
+
+        top_k_sum = np.sum(y_true_sorted[:50])
+        val_k_plus_1 = y_true_sorted[50] if N > 50 else 0
+
+        for i in range(N):
+            new_N = N - 1
+            new_baseline = (baseline_sum - y_true_sorted[i]) / new_N if new_N > 0 else 1e-6
+
+            if i < 50:
+                new_top_k_sum = top_k_sum - y_true_sorted[i] + val_k_plus_1
+                j_ttf = new_top_k_sum / min(50, new_N)
             else:
-                return dataframe.iloc[-1][metric_col]
+                j_ttf = top_k_sum / min(50, new_N)
 
-        pos_in_top_100 = df.iloc[:100]['target'].sum()
-        fr_score = pos_in_top_100 / total_positives
+            jack_ttf50[i] = j_ttf
+            jack_enrichment[i] = j_ttf / new_baseline
+
+        def get_bca_ci(boot_stats, point_stat, jack_stats, alpha=0.05):
+            B = len(boot_stats)
+            prop_less = np.sum(boot_stats < point_stat) / B
+            prop_less = max(min(prop_less, 1 - 1 / (2 * B)), 1 / (2 * B))
+            z0 = norm.ppf(prop_less)
+
+            jack_mean = np.mean(jack_stats)
+            diffs = jack_mean - jack_stats
+            num = np.sum(diffs ** 3)
+            den = 6.0 * (np.sum(diffs ** 2)) ** 1.5
+            a = num / den if den > 0 else 0.0
+
+            z_alpha1 = norm.ppf(alpha / 2)
+            z_alpha2 = norm.ppf(1 - alpha / 2)
+
+            try:
+                q1 = norm.cdf(z0 + (z0 + z_alpha1) / (1 - a * (z0 + z_alpha1)))
+                q2 = norm.cdf(z0 + (z0 + z_alpha2) / (1 - a * (z0 + z_alpha2)))
+            except:
+                q1, q2 = alpha / 2, 1 - alpha / 2
+
+            q1 = max(0.0, min(1.0, q1))
+            q2 = max(0.0, min(1.0, q2))
+
+            return np.percentile(boot_stats, q1 * 100), np.percentile(boot_stats, q2 * 100)
+
+        ttf50_lower, ttf50_upper = get_bca_ci(boot_ttf50, ttf50_point, jack_ttf50)
+        enr_lower, enr_upper = get_bca_ci(boot_enrichment, enrichment_point, jack_enrichment)
 
         metrics = {
-            'TTF20': get_metric_at_k(df, 20, 'precision_at_k'),
-            'TTF50': get_metric_at_k(df, 50, 'precision_at_k'),
-            'TTF100': get_metric_at_k(df, 100, 'precision_at_k'),
-            'FR': fr_score,
-            'Total_Positives': total_positives
+            'TTF50': ttf50_point,
+            'TTF50_lower': ttf50_lower,
+            'TTF50_upper': ttf50_upper,
+            'Enrichment': enrichment_point,
+            'Enrichment_lower': enr_lower,
+            'Enrichment_upper': enr_upper,
+            'Baseline': baseline_prevalence
         }
 
-        return metrics, df
+        return metrics, df, boot_enrichment
 
     def plot_confusion_matrix(self, y_true, y_probs, output_dir, cohort_name):
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -302,23 +360,195 @@ class CohortGeneralizationBenchmark:
         plt.savefig(output_dir / f'confusion_matrix_{cohort_name}.png', bbox_inches='tight', dpi=300)
         plt.close()
 
-    def plot_ranking_curves(self, df_rank, metrics, output_dir, cohort_name):
-        pass
+    # ==========================================================================
+    # NUEVA FUNCIÓN: 4 GRÁFICAS SEPARADAS (Bar, Swarm, Violin, Jitter)
+    # ==========================================================================
+    def plot_enrichment_visualizations(self, summary_data, boot_distributions):
+        print("\n[INFO] Generando 4 figuras separadas con visualizaciones alternativas...")
+        df_res = pd.DataFrame(summary_data)
+
+        # 1. Preparación de etiquetas
+        cohort_stats = {
+            'CEDAR': '(N=8314, n⁺=3056)',
+            'NCI': '(N=2084, n⁺=151)',
+            'HiTIDE': '(N=1515, n⁺=48)',
+            'TESLA': '(N=703, n⁺=72)'
+        }
+
+        cohort_order = df_res['Target_Cohort'].tolist()
+        labels_dict = {c: f"{c}\n{cohort_stats.get(c, '')}" for c in cohort_order}
+
+        # 2. Preparar datos para Seaborn (formato largo)
+        rows_full = []
+        rows_downsampled = []
+
+        for cohort in cohort_order:
+            dist = boot_distributions[cohort]
+            label = labels_dict[cohort]
+
+            # Todos los puntos para el violín y el jitter plot
+            for val in dist:
+                rows_full.append({'Cohort': label, 'Enrichment': val})
+
+            # Downsampling severo para el Swarm plot (sino colapsa el motor de dibujo)
+            np.random.seed(42)
+            sample_size = min(300, len(dist))
+            dist_down = np.random.choice(dist, size=sample_size, replace=False)
+            for val in dist_down:
+                rows_downsampled.append({'Cohort': label, 'Enrichment': val})
+
+        df_full = pd.DataFrame(rows_full)
+        df_swarm = pd.DataFrame(rows_downsampled)
+
+        base_color = '#084594'
+        scatter_color = '#404040'
+
+        x_pos = np.arange(len(df_res))
+        heights = df_res['Enrichment']
+        lower_err = heights - df_res['Enrichment_lower']
+        upper_err = df_res['Enrichment_upper'] - heights
+        x_labels = [labels_dict[c] for c in cohort_order]
+
+        # ---------------------------------------------------------------------
+        # FIGURA 1: Gráfico de Barras (Original)
+        # ---------------------------------------------------------------------
+        fig1, ax1 = plt.subplots(figsize=(8, 6))
+        bars = ax1.bar(x_pos, heights, yerr=[lower_err, upper_err], capsize=8,
+                       color=base_color, edgecolor='black', linewidth=1.5, alpha=0.85,
+                       error_kw={'elinewidth': 2, 'markeredgewidth': 2})
+
+        ax1.axhline(1.0, color='#d62728', linestyle='--', linewidth=2, label='Random Guess (1.0x)')
+        ax1.set_xticks(x_pos)
+        ax1.set_xticklabels(x_labels, fontweight='bold', fontsize=11)
+        ax1.set_ylabel('Fold Enrichment over Baseline (Top-50)', fontweight='bold', fontsize=14)
+        ax1.set_title('Top-50 Enrichment Across Cohorts\n(with 95% BCa Confidence Intervals)', fontweight='bold',
+                      fontsize=16, pad=15)
+        ax1.legend(loc='upper right', frameon=True, edgecolor='black')
+        ax1.grid(axis='y', linestyle='--', alpha=0.5)
+        sns.despine(ax=ax1)
+
+        for i, bar in enumerate(bars):
+            y_upper = df_res['Enrichment_upper'].iloc[i]
+            ax1.text(bar.get_x() + bar.get_width() / 2, y_upper + 0.5, f"{heights.iloc[i]:.1f}x",
+                     ha='center', va='bottom', fontweight='bold', fontsize=12)
+
+        plt.tight_layout()
+        save_path_bar = self.base_figs_dir / 'Cohort_Enrichment_Bar.png'
+        plt.savefig(save_path_bar, dpi=300, bbox_inches='tight')
+        plt.close(fig1)
+
+        # ---------------------------------------------------------------------
+        # FIGURA 2: Swarm Plot (con submuestreo)
+        # ---------------------------------------------------------------------
+        fig2, ax2 = plt.subplots(figsize=(8, 6))
+        sns.swarmplot(data=df_swarm, x='Cohort', y='Enrichment', ax=ax2,
+                      color=scatter_color, size=4, alpha=0.8)
+        ax2.axhline(1.0, color='#d62728', linestyle='--', linewidth=2, label='Random Guess (1.0x)')
+        ax2.set_ylabel('Fold Enrichment (Bootstraps)', fontweight='bold', fontsize=14)
+        ax2.set_xlabel('')
+        ax2.set_xticklabels(x_labels, fontweight='bold', fontsize=11)
+        ax2.set_title('Top-50 Enrichment Distribution\nSwarm Plot (Random 300 bootstraps/cohort)', fontweight='bold',
+                      fontsize=16, pad=15)
+        ax2.grid(axis='y', linestyle='--', alpha=0.5)
+        sns.despine(ax=ax2)
+        ax2.legend(loc='upper right', frameon=True, edgecolor='black')
+
+        for i, val in enumerate(heights):
+            ax2.text(i, val + (val * 0.1), f"{val:.1f}x", ha='center', va='bottom',
+                     fontweight='bold', color=base_color, fontsize=12)
+
+        plt.tight_layout()
+        save_path_swarm = self.base_figs_dir / 'Cohort_Enrichment_Swarm.png'
+        plt.savefig(save_path_swarm, dpi=300, bbox_inches='tight')
+        plt.close(fig2)
+
+        # ---------------------------------------------------------------------
+        # FIGURA 3: Violin Plot
+        # ---------------------------------------------------------------------
+        fig3, ax3 = plt.subplots(figsize=(8, 6))
+
+        # AÑADIMOS cut=0 para que las colas no se extiendan más allá de los datos reales
+        # AÑADIMOS inner=None para quitar cualquier línea gris automática
+        sns.violinplot(data=df_full, x='Cohort', y='Enrichment', ax=ax3,
+                       color=base_color, inner=None, cut=0, alpha=0.6, linewidth=1.5)
+
+        # Nuestros bigotes negros reales (95% CI)
+        ax3.errorbar(x=x_pos, y=heights, yerr=[lower_err, upper_err],
+                     fmt='none', c='black', capsize=8, elinewidth=2, markeredgewidth=2)
+        ax3.scatter(x_pos, heights, color='black', s=50, zorder=3)
+
+        ax3.axhline(1.0, color='#d62728', linestyle='--', linewidth=2, label='Random Guess (1.0x)')
+        ax3.set_ylabel('Fold Enrichment Density', fontweight='bold', fontsize=14)
+        ax3.set_xlabel('')
+        ax3.set_xticklabels(x_labels, fontweight='bold', fontsize=11)
+        ax3.set_title('Top-50 Enrichment Density\nViolin Plot with Point Estimate & 95% CI', fontweight='bold',
+                      fontsize=16, pad=15)
+
+        # Etiquetas de texto (¡Las añadimos para que sea igual a los demás!)
+        for i, val in enumerate(heights):
+            ax3.text(i, df_res['Enrichment_upper'].iloc[i] + 0.5, f"{val:.1f}x",
+                     ha='center', va='bottom', fontweight='bold', fontsize=12)
+
+        ax3.grid(axis='y', linestyle='--', alpha=0.5)
+        sns.despine(ax=ax3)
+        ax3.legend(loc='upper right', frameon=True, edgecolor='black')
+
+        plt.tight_layout()
+        save_path_violin = self.base_figs_dir / 'Cohort_Enrichment_Violin.png'
+        plt.savefig(save_path_violin, dpi=300, bbox_inches='tight')
+        plt.close(fig3)
+
+        # ---------------------------------------------------------------------
+        # FIGURA 4: JITTER PLOT
+        # ---------------------------------------------------------------------
+        fig4, ax4 = plt.subplots(figsize=(8, 6))
+
+        # Jitter plot usando todos los datos con alta transparencia
+        sns.stripplot(data=df_full, x='Cohort', y='Enrichment', ax=ax4,
+                      color=base_color, alpha=0.15, jitter=0.25, size=3, zorder=1)
+
+        # Superponer la estimación puntual (media) y los intervalos CI encima del Jitter
+        ax4.errorbar(x=x_pos, y=heights, yerr=[lower_err, upper_err],
+                     fmt='none', c='black', capsize=15, elinewidth=2.5, markeredgewidth=2.5, zorder=3)
+        ax4.scatter(x_pos, heights, color='white', edgecolor='black', s=80, zorder=4, label='Mean Estimate')
+
+        ax4.axhline(1.0, color='#d62728', linestyle='--', linewidth=2, zorder=0, label='Random Guess (1.0x)')
+        ax4.set_ylabel('Fold Enrichment (All Bootstraps)', fontweight='bold', fontsize=14)
+        ax4.set_xlabel('')
+        ax4.set_xticklabels(x_labels, fontweight='bold', fontsize=11)
+        ax4.set_title('Top-50 Enrichment Distribution\nJitter Plot with Overlaid 95% CI', fontweight='bold',
+                      fontsize=16, pad=15)
+
+        # Etiquetas de texto
+        for i, val in enumerate(heights):
+            ax4.text(i, df_res['Enrichment_upper'].iloc[i] + 0.5, f"{val:.1f}x",
+                     ha='center', va='bottom', fontweight='bold', fontsize=12)
+
+        ax4.grid(axis='y', linestyle='--', alpha=0.5)
+        sns.despine(ax=ax4)
+        ax4.legend(loc='upper right', frameon=True, edgecolor='black')
+
+        plt.tight_layout()
+        save_path_jitter = self.base_figs_dir / 'Cohort_Enrichment_Jitter.png'
+        plt.savefig(save_path_jitter, dpi=300, bbox_inches='tight')
+        plt.close(fig4)
+
+        print(f"✓ Guardadas 4 imágenes separadas en: {self.base_figs_dir}")
 
     def plot_neoranking_benchmark(self, summary_data, y_true_all, y_probs_all):
         if not summary_data: return
         df_res = pd.DataFrame(summary_data)
 
-        my_mean_ttf20 = df_res['TTF20'].mean()
+        my_mean_ttf50 = df_res['TTF50'].mean()
         my_mean_auprc = df_res['AUC_PR'].mean()
 
-        nr_metrics = {'TTF20': 0.250, 'AUPRC': 0.273}
+        nr_metrics = {'TTF': 0.250, 'AUPRC': 0.273}
         color_nr = '#999999'
         color_my = '#084594'
 
-        def plot_individual_metric(metric_name, my_val, nr_val, title, filename):
+        def plot_individual_metric(metric_name, my_val, nr_val, title, filename, my_label):
             plt.figure(figsize=(6, 6))
-            x = ['NeoRanking\n(Benchmark)', 'NeoBridge\n(Mean)']
+            x = ['NeoRanking\n(Benchmark)', my_label]
             y = [nr_val, my_val]
             bars = plt.bar(x, y, color=[color_nr, color_my], edgecolor='black', width=0.6, linewidth=1)
             plt.axhline(nr_val, color='gray', linestyle=':', linewidth=1.5, zorder=0)
@@ -333,9 +563,10 @@ class CohortGeneralizationBenchmark:
             plt.close()
 
         plot_individual_metric('AUPRC Score', my_mean_auprc, nr_metrics['AUPRC'],
-                               'Overall Ranking Quality (AUPRC)', 'Benchmark_NeoRanking_AUPRC.png')
-        plot_individual_metric('TTF20 Score', my_mean_ttf20, nr_metrics['TTF20'],
-                               'Ranking Precision: Top-20 Fraction (TTIF)', 'Benchmark_NeoRanking_TTF20.png')
+                               'Overall Ranking Quality (AUPRC)', 'Benchmark_NeoRanking_AUPRC.png', 'NeoBridge\n(Mean)')
+        plot_individual_metric('TTF Score', my_mean_ttf50, nr_metrics['TTF'],
+                               'Ranking Precision: Top Fraction (TTIF)', 'Benchmark_NeoRanking_TTF.png',
+                               'NeoBridge\n(Mean Top-50)')
 
         fig, ax = plt.subplots(figsize=(8, 6.5))
         prec, rec, _ = precision_recall_curve(y_true_all, y_probs_all)
@@ -351,25 +582,18 @@ class CohortGeneralizationBenchmark:
         plt.savefig(self.bench_figs_dir / 'Benchmark_NeoRanking_PR_Curve.png', dpi=300, bbox_inches='tight')
         plt.close()
 
-    # ==========================================================================
-    # NUEVA VISUALIZACIÓN: SIZE-MATCHED VS FULL DATA (MODIFICADA)
-    # ==========================================================================
     def plot_size_matched_analysis(self, full_data_metrics, size_matched_metrics):
-        """Genera una gráfica evaluando si se pierde ventaja al reducir la N a 3000"""
         print("\n[INFO] Generando visualización de Size-Matched Sensitivity...")
 
         df_sm = pd.DataFrame(size_matched_metrics)
         df_fd = pd.DataFrame(full_data_metrics)
 
-        # Gráfico único de Distribución
         fig, ax = plt.subplots(figsize=(10, 6))
         fig.suptitle('Size-Matched Sensitivity Analysis (N=3000)', y=1.05, fontweight='bold', fontsize=18)
 
-        # Plot: AUPRC Distribution Out-of-Sample
         sns.boxplot(x='Target_Cohort', y='AUPRC', data=df_sm, ax=ax, color='lightblue', showfliers=False)
         sns.stripplot(x='Target_Cohort', y='AUPRC', data=df_sm, ax=ax, color='blue', alpha=0.4, jitter=True)
 
-        # Añadir estrellas/lineas rojas para el Full Data original
         for i, cohort in enumerate(df_fd['Target_Cohort'].unique()):
             val = df_fd[df_fd['Target_Cohort'] == cohort]['AUC_PR'].values[0]
             ax.plot(i, val, marker='*', color='red', markersize=15, label='Full Data' if i == 0 else "")
@@ -378,7 +602,6 @@ class CohortGeneralizationBenchmark:
         ax.set_title('Out-of-Sample AUPRC: Full Data vs N=3000', pad=15)
         ax.set_ylabel('AUPRC')
 
-        # Evitar leyenda duplicada
         handles, labels = ax.get_legend_handles_labels()
         by_label = dict(zip(labels, handles))
         ax.legend(by_label.values(), by_label.keys())
@@ -389,6 +612,60 @@ class CohortGeneralizationBenchmark:
         plt.close()
         print(f"✓ Guardada nueva gráfica: {save_path}")
 
+    def plot_ensemble_weights_per_cohort(self, summary_data):
+        print("\n[INFO] Generando visualización de Pesos del Ensemble por Cohorte...")
+        df = pd.DataFrame(summary_data)
+
+        fig, ax = plt.subplots(figsize=(9, 6))
+
+        cohorts = df['Target_Cohort']
+        # Convertimos a porcentajes
+        mlp_weights = df['MLP_Weight'] * 100
+        xgb_weights = df['XGB_Weight'] * 100
+
+        x = np.arange(len(cohorts))
+        width = 0.5
+
+        # Colores consistentes con tu script de producción
+        colors = ['#305F88', '#D95319']  # Azul para MLP, Naranja para XGBoost
+
+        # Crear barras apiladas
+        p1 = ax.bar(x, mlp_weights, width, label='Improved MLP', color=colors[0], edgecolor='black', linewidth=1)
+        p2 = ax.bar(x, xgb_weights, width, bottom=mlp_weights, label='XGBoost', color=colors[1], edgecolor='black',
+                    linewidth=1)
+
+        # Añadir el texto del porcentaje dentro de las barras
+        for i in range(len(cohorts)):
+            if mlp_weights.iloc[i] > 3:  # Solo imprimir si el bloque es suficientemente grande
+                ax.text(x[i], mlp_weights.iloc[i] / 2, f"{mlp_weights.iloc[i]:.1f}%",
+                        ha='center', va='center', color='white', fontweight='bold', fontsize=12)
+            if xgb_weights.iloc[i] > 3:
+                ax.text(x[i], mlp_weights.iloc[i] + xgb_weights.iloc[i] / 2, f"{xgb_weights.iloc[i]:.1f}%",
+                        ha='center', va='center', color='white', fontweight='bold', fontsize=12)
+
+        # Línea base para comprobar tu hipótesis (10% que saca en producción)
+        ax.axhline(10, color='#d62728', linestyle='--', linewidth=2, label='Production MLP Baseline (10%)')
+
+        # Estilo del gráfico
+        ax.set_ylabel('Model Contribution Weight (%)', fontweight='bold', fontsize=14)
+        ax.set_title('Ensemble Weight Distribution Across Out-of-Sample Cohorts', fontweight='bold', fontsize=16,
+                     pad=15)
+        ax.set_xticks(x)
+        ax.set_xticklabels(cohorts, fontweight='bold', fontsize=12)
+        ax.set_ylim(0, 100)
+
+        # Leyenda fuera del gráfico para que no tape los datos
+        ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), frameon=True, edgecolor='black', fontsize=12)
+
+        ax.grid(axis='y', linestyle='--', alpha=0.4)
+        sns.despine()
+
+        plt.tight_layout()
+        save_path = self.base_figs_dir / 'Cohort_Ensemble_Weights_Contribution.png'
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"✓ Guardada gráfica de contribución de pesos en: {save_path}")
+
     def run_benchmark(self):
         print("=" * 70)
         print("STARTING COHORT BENCHMARK & SIZE-MATCHED SENSITIVITY")
@@ -398,11 +675,13 @@ class CohortGeneralizationBenchmark:
         summary_full_data = []
         summary_size_matched = []
 
+        # Diccionario para almacenar las distribuciones de cada cohorte
+        boot_distributions = {}
+
         all_y_true = []
         all_y_probs = []
 
-        # NÚMERO DE ITERACIONES
-        n_iterations = 100
+        n_iterations = 250
         target_train_size = 3000
 
         for target_cohort in cohorts:
@@ -414,9 +693,6 @@ class CohortGeneralizationBenchmark:
 
             if len(df_test) < 10: continue
 
-            # ==========================================================
-            # 1. FULL DATA ANALYSIS
-            # ==========================================================
             train_pos_ratio = df_train_full['immunogenicity'].mean()
             test_pos_ratio = df_test['immunogenicity'].mean()
             pos_weight = (1 - train_pos_ratio) / train_pos_ratio if train_pos_ratio > 0 else 1.0
@@ -428,34 +704,67 @@ class CohortGeneralizationBenchmark:
             X_train_scaled = scaler.fit_transform(X_train_raw)
             X_test_scaled = scaler.transform(X_test_raw)
 
-            skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-            t_idx, v_idx = next(skf.split(X_train_scaled, y_train_full))
-            X_train, y_train = X_train_scaled[t_idx], y_train_full[t_idx]
-            X_val, y_val = X_train_scaled[v_idx], y_train_full[v_idx]
+            # =================================================================
+            # FIX: VALIDACIÓN OUT-OF-DISTRIBUTION (OOD) INTERNA
+            # =================================================================
+            # Extraemos una cohorte distinta a la target para usarla como validación.
+            # Así obligamos a Optuna a asignar pesos basados en generalización OOD.
+            available_cohorts = df_train_full['cohort'].unique()
+            val_cohort_internal = available_cohorts[0]  # Cogemos una cohorte para validar
+
+            print(f"    [!] Usando {val_cohort_internal} como set de validación OOD para Optuna.")
+
+            # Creamos la máscara booleana manteniendo el orden del dataframe
+            val_mask = (df_train_full['cohort'] == val_cohort_internal).values
+            train_mask_internal = ~val_mask
+
+            X_train = X_train_scaled[train_mask_internal]
+            y_train = y_train_full[train_mask_internal]
+            X_val = X_train_scaled[val_mask]
+            y_val = y_train_full[val_mask]
+            # =================================================================
 
             mlp_cfg = self.fast_optimize_mlp(X_train, y_train, X_val, y_val, pos_weight)
             mlp_model, xgb_model = self.train_final_models(X_train_scaled, y_train_full, mlp_cfg, pos_weight)
 
             ensemble = HybridEnsemble(mlp_model, xgb_model, self.device)
             best_w = self.optimize_weights_optuna(ensemble, X_val, y_val)
-            test_probs, _, _ = ensemble.predict_proba(X_test_scaled, best_w)
+
+            # --- CÓDIGO MODIFICADO PARA COMPROBAR LA HIPÓTESIS ---
+            # Capturamos las probabilidades individuales además de las del ensemble
+            test_probs, pt_prob, xgb_prob = ensemble.predict_proba(X_test_scaled, best_w)
+
+            # Calculamos AUPRC real (Out-of-Distribution) para cada uno
+            ap_ensemble = average_precision_score(y_test, test_probs)
+            ap_mlp = average_precision_score(y_test, pt_prob)
+            ap_xgb = average_precision_score(y_test, xgb_prob)
+
+            print(f"\n[METRICAS OOD AISLADAS - {target_cohort}]")
+            print(f"  - MLP Solo (AUPRC):     {ap_mlp:.4f}")
+            print(f"  - XGBoost Solo (AUPRC): {ap_xgb:.4f}")
+            print(f"  - Ensemble (AUPRC):     {ap_ensemble:.4f}")
+            # -----------------------------------------------------
 
             all_y_true.extend(y_test)
             all_y_probs.extend(test_probs)
 
-            rank_metrics, df_rank = self.analyze_ranking_performance(y_test, test_probs, target_cohort)
-            ap = average_precision_score(y_test, test_probs)
+            # EXTRAEMOS LA DISTRIBUCIÓN BOOTSTRAP (boot_enr)
+            rank_metrics, df_rank, boot_enr = self.analyze_ranking_performance(y_test, test_probs, target_cohort)
+
+            # Guardamos en el diccionario general
+            boot_distributions[target_cohort] = boot_enr
 
             summary_full_data.append({
-                'Target_Cohort': target_cohort, 'AUC_PR': ap,
-                'Baseline_PR': test_pos_ratio, 'TTF20': rank_metrics['TTF20'],
-                'TTF50': rank_metrics['TTF50'], 'TTF100': rank_metrics['TTF100'],
-                'FR': rank_metrics['FR'], 'Total_Pos': rank_metrics['Total_Positives']
+                'Target_Cohort': target_cohort,
+                'AUC_PR': ap_ensemble,  # Usamos la métrica que ya calculamos arriba
+                'Enrichment': rank_metrics.get('Enrichment', 0),
+                'Enrichment_lower': rank_metrics.get('Enrichment_lower', 0),
+                'Enrichment_upper': rank_metrics.get('Enrichment_upper', 0),
+                'TTF50': rank_metrics.get('TTF50', 0),
+                'MLP_Weight': best_w[0],  # Peso del PyTorch Model
+                'XGB_Weight': best_w[1]  # Peso del XGBoost
             })
 
-            # ==========================================================
-            # 2. SIZE-MATCHED SENSITIVITY ANALYSIS
-            # ==========================================================
             print(f"    [!] Ejecutando Size-Matched Analysis (n={n_iterations}, N_train={target_train_size})...")
 
             pool_pos = df_train_full[df_train_full['immunogenicity'] == 1]
@@ -463,6 +772,8 @@ class CohortGeneralizationBenchmark:
 
             n_pos_target = int(target_train_size * train_pos_ratio)
             n_neg_target = target_train_size - n_pos_target
+
+            skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 
             for i in range(n_iterations):
                 sample_pos = pool_pos.sample(n=n_pos_target, replace=False)
@@ -477,18 +788,15 @@ class CohortGeneralizationBenchmark:
 
                 t_idx_m, v_idx_m = next(skf.split(X_match_scaled, y_match))
 
-                # Ajuste: Aumentamos el dropout rate también durante la optimización
                 m_cfg = self.fast_optimize_mlp(
                     X_match_scaled[t_idx_m], y_match[t_idx_m],
                     X_match_scaled[v_idx_m], y_match[v_idx_m],
                     pos_weight, n_trials=3, dropout_rate=0.5
                 )
 
-                # Ajuste: Usamos el entrenamiento regularizado para el tamaño de 3000
                 m_mlp, m_xgb = self.train_final_models_regularized(X_match_scaled, y_match, m_cfg, pos_weight)
                 ens_match = HybridEnsemble(m_mlp, m_xgb, self.device)
-                bw_match = self.optimize_weights_optuna(ens_match, X_match_scaled[v_idx_m], y_match[v_idx_m],
-                                                        n_trials=5)
+                bw_match = best_w
 
                 train_probs, _, _ = ens_match.predict_proba(X_match_scaled, bw_match)
                 test_probs_m, _, _ = ens_match.predict_proba(X_test_matched_scaled, bw_match)
@@ -505,8 +813,14 @@ class CohortGeneralizationBenchmark:
         self.plot_neoranking_benchmark(summary_full_data, np.array(all_y_true), np.array(all_y_probs))
         self.plot_size_matched_analysis(summary_full_data, summary_size_matched)
 
+        # LLAMADA A LA FUNCIÓN QUE GENERA 4 ARCHIVOS SEPARADOS
+        self.plot_enrichment_visualizations(summary_full_data, boot_distributions)
+
+        self.plot_ensemble_weights_per_cohort(summary_full_data)
+
         pd.DataFrame(summary_size_matched).to_csv(self.base_reports_dir / 'size_matched_distributions.csv', index=False)
         print(f"\n[INFO] Benchmark Completed. CSV de distribuciones exportado.")
+
 
 
 if __name__ == "__main__":
