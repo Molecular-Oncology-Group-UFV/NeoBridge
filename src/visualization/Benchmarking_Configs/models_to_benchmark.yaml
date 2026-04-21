@@ -2,7 +2,7 @@
 # Lista ampliada de modelos - SIN OVERSAMPLING
 
 dataset:
-  path: "data/processed/NeoPepBase.csv"
+  path: "data/raw/NeoPepBase.csv"
   target_column: "immunogenicity"
   test_size: 0.2
   random_state: 42
