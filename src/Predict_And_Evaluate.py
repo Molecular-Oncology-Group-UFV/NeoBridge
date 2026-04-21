@@ -257,7 +257,7 @@ class DiscoveryPipeline:
 # EXECUTION
 # ==============================================================================
 if __name__ == "__main__":
-    DATASET_PATH = "data/processed/dataset_pancreas_completo.csv"
+    DATASET_PATH = "data/raw/dataset_pancreas_completo.csv"
     MODELS_DIR = "models/production/hybrid_ensemble"
     REPORTS_DIR = "results/reports/predictions_discovery_reports"
     FIGURES_DIR = "predictions_discovery"

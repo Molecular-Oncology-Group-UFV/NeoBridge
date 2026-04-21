@@ -86,7 +86,7 @@ class CohortScalingBenchmark:
         self.project_root = Path(__file__).resolve().parent.parent.parent
 
         # IMPORTANTE: Asegúrate de que este archivo tiene la columna 'cohort'
-        self.data_path = self.project_root / 'data' / 'processed' / 'dataset_80_20_normalized_tcr_with_cohort_and_rank.csv'
+        self.data_path = self.project_root / 'data' / 'raw' / 'NeoPepBase.csv'
 
         self.reports_dir = self.project_root / 'results' / 'reports' / 'cohort_scaling'
         self.figures_dir = self.project_root / 'results' / 'figures' / 'cohort_scaling'

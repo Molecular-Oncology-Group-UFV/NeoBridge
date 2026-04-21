@@ -21,9 +21,8 @@ catboost_info/
 Datasets_Prueba/
 # Si tienes datos crudos muy pesados que no vas a subir:
 data/raw/
-data/interim/proteomal/
-data/processed/Custom_Top1000_FragPipe.fasta
-data/processed/dataset_pancreas_completo.csv
+data/raw/proteomal/
+data/raw/dataset_pancreas_completo.csv
 data/peptides.tsv
 
 # --- Entornos Virtuales ---

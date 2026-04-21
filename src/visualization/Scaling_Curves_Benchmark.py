@@ -117,7 +117,7 @@ class ScalingCurveBenchmark:
         self.project_root = Path(__file__).resolve().parent.parent.parent
 
         # Input Data Path
-        self.data_path = self.project_root / 'data' / 'processed' / 'dataset_80_20_normalized_tcr_with_cohort_and_rank.csv'
+        self.data_path = self.project_root / 'data' / 'raw' / 'NeoPepBase.csv'
 
         # Output Paths
         self.reports_dir = self.project_root / 'results' / 'reports' / 'scaling_curves'

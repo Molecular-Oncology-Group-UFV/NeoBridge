@@ -12,7 +12,7 @@ class CohortVisualizer:
     def __init__(self):
         # Path configuration
         self.project_root = Path(__file__).resolve().parent.parent.parent
-        self.data_path = self.project_root / 'data' / 'processed' / 'dataset_80_20_normalized_tcr_with_cohort_and_rank.csv'
+        self.data_path = self.project_root / 'data' / 'raw' / 'NeoPepBase.csv'
 
         self.output_dir = self.project_root / 'results' / 'figures' / 'cancer_cohort_figures'
         self.output_dir.mkdir(parents=True, exist_ok=True)

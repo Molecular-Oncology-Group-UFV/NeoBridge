@@ -21,7 +21,7 @@ class NeoRankingEnsemble:
         self.project_root = Path(__file__).resolve().parent.parent.parent
 
         # Input Data Path
-        self.data_path = self.project_root / 'data' / 'processed' / 'dataset_80_20_normalized_tcr_with_cohort_and_rank.csv'
+        self.data_path = self.project_root / 'data' / 'raw' / 'NeoPepBase.csv'
 
         # Optimization Results Path
         self.optuna_path = self.project_root / 'results' / 'reports' / 'Optuna_Results' / 'optuna_results_general.csv'

@@ -102,7 +102,7 @@ class HybridEnsemble:
 class CohortGeneralizationBenchmark:
     def __init__(self):
         self.project_root = Path(__file__).resolve().parent.parent.parent
-        self.data_path = self.project_root / 'data' / 'processed' / 'dataset_80_20_normalized_tcr_with_cohort_and_rank.csv'
+        self.data_path = self.project_root / 'data' / 'raw' / 'NeoPepBase.csv'
         self.base_figs_dir = self.project_root / 'results' / 'figures' / 'cohort_generalization'
         self.base_reports_dir = self.project_root / 'results' / 'reports' / 'cohort_generalization'
         self.bench_figs_dir = self.project_root / 'results' / 'figures' / 'benchmarking'
