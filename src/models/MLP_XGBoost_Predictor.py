@@ -24,21 +24,25 @@ warnings.filterwarnings('ignore')
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 # ==============================================================================
-# CONFIGURACIÓN DE MATPLOTLIB PARA PUBLICACIÓN CIENTÍFICA
+# MATPLOTLIB CONFIGURATION FOR SCIENTIFIC PUBLICATION (LARGE SIZE)
 # ==============================================================================
 plt.style.use('seaborn-v0_8-whitegrid')
 rcParams.update({
     'font.family': 'DejaVu Sans',
-    'font.size': 12,               # Tamaño base de fuente
-    'axes.titlesize': 16,           # Título de los ejes
-    'axes.labelsize': 14,           # Etiquetas de los ejes
-    'xtick.labelsize': 11,          # Números del eje X
-    'ytick.labelsize': 11,          # Números del eje Y
-    'legend.fontsize': 11,           # Leyenda
-    'figure.titlesize': 18,          # Título de la figura
-    'figure.dpi': 300,               # Resolución por defecto
-    'savefig.dpi': 300               # Resolución al guardar
+    'font.size': 18,  # General base size
+    'axes.titlesize': 22,  # Axes titles
+    'axes.labelsize': 20,  # Axes labels
+    'axes.titleweight': 'bold',
+    'axes.labelweight': 'bold',
+    'xtick.labelsize': 16,  # X-axis ticks
+    'ytick.labelsize': 16,  # Y-axis ticks
+    'legend.fontsize': 16,  # Legend text
+    'legend.title_fontsize': 18,  # Legend title
+    'figure.titlesize': 24,  # Overall figure title
+    'figure.dpi': 300,  # Default resolution
+    'savefig.dpi': 300  # Save resolution
 })
+
 
 # ==============================================================================
 # HELPER CLASSES
@@ -154,34 +158,33 @@ class HybridEnsemblePipeline:
         print("GENERATING FEATURE CORRELATION ANALYSIS")
         print("=" * 60)
 
-        # Crear DataFrame temporal con las variables de entrenamiento
+        # Create temporary DataFrame with training variables
         df_features = pd.DataFrame(X, columns=feature_names)
 
-        # Calcular correlación de Pearson (usa 'spearman' si prefieres correlación por rangos)
+        # Calculate Pearson correlation (use 'spearman' for rank correlation if preferred)
         corr_matrix = df_features.corr(method='pearson')
 
-        # Configurar el tamaño de la figura dependiendo del número de variables
+        # Configure figure size based on number of variables
         fig_size = max(10, len(feature_names) * 0.4)
         plt.figure(figsize=(fig_size, fig_size * 0.8))
 
-        # Crear máscara para el triángulo superior (formato típico en papers)
+        # Create mask for the upper triangle (typical format in papers)
         mask = np.triu(np.ones_like(corr_matrix, dtype=bool))
 
-        # Paleta divergente: azul para positiva, rojo para negativa (o viceversa)
+        # Diverging palette: blue for positive, red for negative
         cmap = sns.diverging_palette(230, 20, as_cmap=True)
 
-        # Dibujar el heatmap. Si tienes menos de 15 variables, puedes poner annot=True
+        # Draw the heatmap
         sns.heatmap(corr_matrix, mask=mask, cmap=cmap, vmax=1.0, vmin=-1.0, center=0,
                     square=True, linewidths=.5, cbar_kws={"shrink": .75},
                     annot=False, fmt=".2f")
 
-        plt.title('Feature Correlation Matrix', fontsize=18, fontweight='bold', pad=20)
-        plt.xticks(rotation=45, ha='right', fontsize=11)
-        plt.yticks(fontsize=11)
+        plt.title('Feature Correlation Matrix', pad=20)
+        plt.xticks(rotation=45, ha='right')
 
         plt.tight_layout()
 
-        # Guardar resultados
+        # Save results
         save_path_plot = self.figures_dir / 'eda' / 'feature_correlation_matrix.png'
         save_path_csv = self.reports_dir / 'eda' / 'feature_correlation_matrix.csv'
 
@@ -343,21 +346,18 @@ class HybridEnsemblePipeline:
 
         plt.figure(figsize=(6, 5))
 
-        # Exactamente tu estilo original (sin bordes), pero con los números internos más grandes (size 14)
-        ax = sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                         annot_kws={"size": 14})
+        # Exact original style (without borders)
+        ax = sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
 
-        # Títulos de los ejes como los tenías, con fuente 14
-        ax.set_xlabel('Predicted', fontsize=14, labelpad=10)
-        ax.set_ylabel('True', fontsize=14, labelpad=10)
+        ax.set_xlabel('Predicted', labelpad=10)
+        ax.set_ylabel('True', labelpad=10)
 
-        # Etiquetas limpias (0 y 1) con fuente 12.
-        # Ponemos rotation=0 en el eje Y para que los números se lean rectos (en tu original salían tumbados)
-        ax.set_xticklabels(['0', '1'], fontsize=12)
-        ax.set_yticklabels(['0', '1'], fontsize=12, rotation=0)
+        # Clean labels (0 and 1)
+        # Set rotation=0 on the Y axis so numbers are read straight
+        ax.set_xticklabels(['0', '1'])
+        ax.set_yticklabels(['0', '1'], rotation=0)
 
-        # Título idéntico al tuyo original pero más grande
-        plt.title(f'Confusion Matrix ({set_name})\nThresh: {threshold:.3f}', fontsize=16, pad=15)
+        plt.title(f'Confusion Matrix ({set_name})\nThresh: {threshold:.3f}', pad=15)
 
         plt.tight_layout()
         save_path = self.figures_dir / 'performance' / f'confusion_matrix_paper.png'
@@ -366,34 +366,33 @@ class HybridEnsemblePipeline:
         plt.close()
         print(f"✓ Confusion Matrix saved to: {save_path}")
 
-
     def analyze_feature_importance(self, pytorch_model, xgb_model, X_sample, weights):
         print("\nGenerating Scientific Feature Importance Analysis...")
 
-        # 1. Calcular Importancia XGBoost (SHAP)
+        # 1. Calculate XGBoost Importance (SHAP)
         explainer = shap.TreeExplainer(xgb_model)
         shap_values = explainer.shap_values(X_sample)
         xgb_imp = np.abs(shap_values).mean(0)
 
-        # 2. Calcular Importancia MLP (Input * Gradient)
+        # 2. Calculate MLP Importance (Input * Gradient)
         pytorch_model.eval()
         X_t = torch.tensor(X_sample, dtype=torch.float32).to(self.device)
         X_t.requires_grad = True
         outputs = pytorch_model(X_t)
         outputs.backward(torch.ones_like(outputs))
 
-        # Calculamos la importancia absoluta
+        # Calculate absolute importance
         grads = X_t.grad.cpu().numpy()
         mlp_imp = np.abs(grads * X_sample).mean(0)  # Input * Gradient method
 
-        # 3. Normalizar para que sumen 1 (Importancia Relativa)
+        # 3. Normalize so they sum to 1 (Relative Importance)
         xgb_imp /= xgb_imp.sum()
         mlp_imp /= mlp_imp.sum()
 
-        # 4. Calcular Importancia del Ensemble ponderada
+        # 4. Calculate weighted Ensemble Importance
         ens_imp = weights[0] * mlp_imp + weights[1] * xgb_imp
 
-        # 5. Crear DataFrame y procesar para visualización
+        # 5. Create DataFrame and process for visualization
         df_imp = pd.DataFrame({
             'Feature': self.feature_names,
             'MLP': mlp_imp,
@@ -401,26 +400,26 @@ class HybridEnsemblePipeline:
             'Ensemble': ens_imp
         })
 
-        # Ordenar por Ensemble y coger el Top 20 para no saturar la gráfica
+        # Sort by Ensemble and take the Top 20 to avoid cluttering the graph
         df_imp = df_imp.sort_values('Ensemble', ascending=False).head(20)
 
-        # Guardar CSV crudo
+        # Save raw CSV
         df_imp.to_csv(self.reports_dir / 'feature_importance' / 'ensemble_importance.csv', index=False)
 
-        # Derretir (Melt) el DataFrame para poder usar Seaborn hue
+        # Melt the DataFrame to use Seaborn hue
         df_melted = df_imp.melt(id_vars='Feature', var_name='Model', value_name='Importance')
 
-        # --- PLOTTING MEJORADO PARA PAPER ---
+        # --- IMPROVED PLOTTING FOR PAPER ---
         plt.figure(figsize=(10, 8))
 
-        # Definir paleta de azules profesionales
+        # Define professional blues palette
         scientific_blues = {
-            'MLP': '#9ecae1',  # Azul cielo suave
-            'XGBoost': '#4292c6',  # Azul corporativo medio
-            'Ensemble': '#084594'  # Azul marino intenso
+            'MLP': '#9ecae1',  # Soft sky blue
+            'XGBoost': '#4292c6',  # Medium corporate blue
+            'Ensemble': '#084594'  # Deep navy blue
         }
 
-        # Crear el gráfico de barras horizontal
+        # Create the horizontal bar plot
         ax = sns.barplot(
             data=df_melted,
             x='Importance',
@@ -431,30 +430,28 @@ class HybridEnsemblePipeline:
             linewidth=0.5
         )
 
-        # Estilo "Paper" con tamaños de fuente actualizados
-        ax.set_title('Feature Importance Comparison (Top 20)', fontsize=16, fontweight='bold', pad=15)
-        ax.set_xlabel('Relative Importance (Normalized)', fontsize=14, fontweight='bold')
-        ax.set_ylabel('', fontsize=14)
+        # Paper style with updated font sizes (removed hardcoded)
+        ax.set_title('Feature Importance Comparison (Top 20)', pad=15)
+        ax.set_xlabel('Relative Importance (Normalized)')
+        ax.set_ylabel('')
 
-        # Rejilla vertical solamente
+        # Vertical grid only
         ax.grid(axis='x', linestyle='--', alpha=0.6)
         ax.grid(visible=False, axis='y')
 
-        # Leyenda dentro del gráfico
-        plt.legend(title='Model Component', title_fontsize=12, fontsize=11,
-                   loc='lower right', frameon=True, framealpha=0.9, edgecolor='#cccccc')
+        # Legend inside the graph
+        plt.legend(title='Model Component', loc='lower right', frameon=True, framealpha=0.9, edgecolor='#cccccc')
 
-        plt.yticks(fontsize=12)
         sns.despine(left=True, bottom=False)
 
         plt.tight_layout()
 
-        # Guardar
+        # Save
         save_path = self.figures_dir / 'feature_importance' / 'ensemble_feature_importance_scientific.png'
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close()
 
-        print(f"✓ Gráfico científico guardado en: {save_path}")
+        print(f"✓ Scientific plot saved to: {save_path}")
         return np.corrcoef(mlp_imp, xgb_imp)[0, 1]
 
     def save_optimization_results(self, study, model_type, metric):
@@ -488,19 +485,18 @@ class HybridEnsemblePipeline:
 
         df_metrics = pd.DataFrame([val_metrics, test_metrics], index=['Validation', 'Test']).T
 
-        # CAMBIO 1: Figura un poco más alta y ancha para que las celdas respiren
+        # Figure slightly taller and wider so cells can breathe
         plt.figure(figsize=(6, 7))
 
-        # CAMBIO 2: Tamaño de fuente a 12 (antes 14)
         sns.heatmap(df_metrics, annot=True, fmt=".3f", cmap="Blues",
                     cbar_kws={'label': 'Score Value', 'shrink': 0.8},
-                    annot_kws={"size": 12, "weight": "bold"})
+                    annot_kws={"weight": "bold"})
 
-        plt.title('NeoBridge Performance:\nValidation vs. Test Set', pad=20, fontsize=16, fontweight='bold')
-        plt.ylabel('Metric', fontsize=14, fontweight='bold')
-        plt.xlabel('Dataset Split', fontsize=14, fontweight='bold')
-        plt.yticks(rotation=0, fontsize=12)
-        plt.xticks(fontsize=12)
+        plt.title('NeoBridge Performance:\nValidation vs. Test Set', pad=20)
+        plt.ylabel('Metric')
+        plt.xlabel('Dataset Split')
+        plt.yticks(rotation=0)
+
         plt.tight_layout()
 
         save_path = self.figures_dir / 'performance' / 'validation_test_comparison.png'
@@ -557,14 +553,13 @@ class HybridEnsemblePipeline:
         baseline_precision = total_positives / total_samples
         ax1.axhline(y=baseline_precision, color='grey', linestyle='-.',
                     label=f'Baseline Prevalence ({baseline_precision:.3f})')
-        ax1.set_title('Precision at Rank K (Focus on TTF20)', fontsize=16, fontweight='bold')
-        ax1.set_xlabel('Rank K (Number of top candidates selected)', fontsize=14)
-        ax1.set_ylabel('Cumulative Precision (Fraction of Positives)', fontsize=14)
+        ax1.set_title('Precision at Rank K (Focus on TTF20)')
+        ax1.set_xlabel('Rank K (Number of top candidates selected)')
+        ax1.set_ylabel('Cumulative Precision (Fraction of Positives)')
         ax1.set_xlim(1, zoom_k)
         ax1.set_ylim(0, 1.05)
-        ax1.legend(loc='upper right', frameon=True, fontsize=11)
+        ax1.legend(loc='upper right', frameon=True)
         ax1.grid(True, linestyle='--', alpha=0.7)
-        ax1.tick_params(labelsize=12)
 
         ax2 = axes[1]
         sns.lineplot(data=plot_data, x='rank', y='recall_at_k', ax=ax2, color='#2ca02c', linewidth=2.5,
@@ -578,20 +573,19 @@ class HybridEnsemblePipeline:
                 if rec_val > 0:
                     ax2.plot([1, n], [rec_val, rec_val], color=color, linestyle=':', alpha=0.5)
                 ax2.text(n + 2, rec_val - (0.02 if rec_val > 0.1 else -0.01), f'Recall@{n}: {rec_val:.3f}',
-                         color=color, fontweight='bold', fontsize=10)
+                         color=color, fontweight='bold')
         random_recall_at_zoom = zoom_k / total_samples
         ax2.plot([1, zoom_k], [1 / total_positives if total_positives > 0 else 0, random_recall_at_zoom],
                  color='grey', linestyle='-.', label='Random Guessing')
-        ax2.set_title('Recall at Rank K (Cumulative Positives Found)', fontsize=16, fontweight='bold')
-        ax2.set_xlabel('Rank K', fontsize=14)
-        ax2.set_ylabel('Cumulative Recall', fontsize=14)
+        ax2.set_title('Recall at Rank K (Cumulative Positives Found)')
+        ax2.set_xlabel('Rank K')
+        ax2.set_ylabel('Cumulative Recall')
         ax2.set_xlim(1, zoom_k)
         ax2.set_ylim(0, max(plot_data['recall_at_k'].max() * 1.1, 0.1))
-        ax2.legend(loc='lower right', frameon=True, fontsize=11)
+        ax2.legend(loc='lower right', frameon=True)
         ax2.grid(True, linestyle='--', alpha=0.7)
-        ax2.tick_params(labelsize=12)
 
-        plt.suptitle(f'Ranking Performance Analysis\n(AUPRC: {auprc:.4f} | TTF20: {ttif:.3f})', fontsize=18, y=1.02)
+        plt.suptitle(f'Ranking Performance Analysis\n(AUPRC: {auprc:.4f} | TTF20: {ttif:.3f})', y=1.02)
         plt.tight_layout()
 
         plot_path = self.figures_dir / 'performance' / 'ranking_metrics_analysis.png'
@@ -618,47 +612,33 @@ class HybridEnsemblePipeline:
                      label='Improved MLP (PyTorch)')
         p2 = ax.barh(0, w_xgb, left=w_nn, height=0.6, color=colors[1], edgecolor='black', linewidth=1, label='XGBoost')
         if w_nn > 0.05:
-            ax.text(w_nn / 2, 0, f"{w_nn * 100:.1f}%", ha='center', va='center', color='white', fontweight='bold',
-                    fontsize=14)
+            ax.text(w_nn / 2, 0, f"{w_nn * 100:.1f}%", ha='center', va='center', color='white', fontweight='bold')
         if w_xgb > 0.05:
             ax.text(w_nn + w_xgb / 2, 0, f"{w_xgb * 100:.1f}%", ha='center', va='center', color='white',
-                    fontweight='bold', fontsize=14)
+                    fontweight='bold')
         ax.set_xlim(0, 1)
         ax.set_ylim(-0.5, 0.5)
         ax.set_yticks([])
         ax.set_xticks([0, 0.25, 0.5, 0.75, 1.0])
-        ax.set_xticklabels(['0', '25%', '50%', '75%', '100%'], fontsize=12)
-        ax.set_xlabel('Model Contribution Weight ($w$)', fontsize=14, labelpad=10, fontweight='bold')
-        ax.legend(loc='lower center', bbox_to_anchor=(0.5, 1.1), ncol=2, frameon=False, fontsize=12, handletextpad=0.5)
-        fig.text(0.5, 0.92, 'Hybrid Ensemble Weight Distribution', ha='center', va='center', fontsize=18,
-                 fontweight='bold', color='#333333')
+        ax.set_xticklabels(['0', '25%', '50%', '75%', '100%'])
+        ax.set_xlabel('Model Contribution Weight ($w$)', labelpad=10)
+        ax.legend(loc='lower center', bbox_to_anchor=(0.5, 1.1), ncol=2, frameon=False, handletextpad=0.5)
+        fig.text(0.5, 0.92, 'Hybrid Ensemble Weight Distribution', ha='center', va='center', color='#333333')
         formula_latex = (
-                    r"$P(y=1|x) = \mathbf{" + f"{w_nn:.3f}" + r"} \cdot \sigma(f_{MLP}(x)) + " r"\mathbf{" + f"{w_xgb:.3f}" + r"} \cdot P_{XGB}(x)$")
-        fig.text(0.5, 0.15, formula_latex, ha='center', va='center', fontsize=14, color='#222222',
+                r"$P(y=1|x) = \mathbf{" + f"{w_nn:.3f}" + r"} \cdot \sigma(f_{MLP}(x)) + " r"\mathbf{" + f"{w_xgb:.3f}" + r"} \cdot P_{XGB}(x)$")
+        fig.text(0.5, 0.15, formula_latex, ha='center', va='center', color='#222222',
                  bbox=dict(facecolor='#f8f9fa', edgecolor='#cccccc', boxstyle='round,pad=0.6', linewidth=0.5))
         save_path = self.figures_dir / 'performance' / 'ensemble_contribution_formula.png'
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close()
         print(f"✓ Ensemble contribution figure saved to: {save_path}")
 
-    # ==========================================================================
-    # NUEVA FUNCIÓN: Figura 8 (Benchmarking vs ImmuneMirror)
-    # ==========================================================================
     def generate_immunemirror_benchmark(self, y_true, y_probs):
-        """
-        Genera TRES figuras independientes para el paper:
-        1. Comparativa de AUC.
-        2. Comparativa de Punto de Operación (Sensibilidad a Especificidad fija).
-        3. Curva ROC con el punto de referencia de ImmuneMirror.
-        """
         print("\n" + "=" * 60)
         print("GENERATING SCIENTIFIC BENCHMARK FIGURES (Vs. ImmuneMirror)")
         print("=" * 60)
 
-        # --- CÁLCULO DE MÉTRICAS ---
         my_auc = roc_auc_score(y_true, y_probs)
-
-        # Curva ROC y buscar el punto donde Especificidad es ~0.70
         fpr, tpr, thresholds = roc_curve(y_true, y_probs)
         target_fpr = 1 - 0.70
         idx = np.argmin(np.abs(fpr - target_fpr))
@@ -669,33 +649,23 @@ class HybridEnsemblePipeline:
         print(f"NeoBridge AUC: {my_auc:.3f}")
         print(f"At Specificity {my_spec_at_spec70:.3f}: Sensitivity = {my_sens_at_spec70:.3f}")
 
-        # Datos de ImmuneMirror
         im_metrics = {'AUC': 0.868, 'Sensitivity': 0.851, 'Specificity': 0.700}
+        color_im = '#B0B0B0'
+        color_my = '#084594'
 
-        # Colores
-        color_im = '#B0B0B0'  # Gris suave
-        color_my = '#084594'  # Azul Ensemble
-
-        # ======================================================================
-        # FIGURA 1: AUC COMPARISON (Archivo separado)
-        # ======================================================================
         plt.figure(figsize=(6, 6))
-
         models = ['ImmuneMirror (RF)', 'NeoBridge']
         aucs = [im_metrics['AUC'], my_auc]
-
         bars = plt.bar(models, aucs, color=[color_im, color_my],
                        edgecolor='black', linewidth=1, width=0.6)
 
         plt.axhline(im_metrics['AUC'], color='gray', linestyle=':', linewidth=1.5, zorder=0, alpha=0.7)
-        plt.bar_label(bars, fmt='%.3f', padding=3, fontsize=14, fontweight='bold')
+        plt.bar_label(bars, fmt='%.3f', padding=3, fontweight='bold')
 
         plt.ylim(0, 1.15)
-        plt.ylabel('AUC-ROC Score', fontsize=16, fontweight='bold')
-        plt.title('Classification Power (AUC-ROC)', fontsize=18, fontweight='bold', pad=15)
+        plt.ylabel('AUC-ROC Score')
+        plt.title('Classification Power (AUC-ROC)', pad=15)
         plt.grid(axis='y', linestyle='--', alpha=0.3)
-        plt.xticks(fontsize=14)
-        plt.yticks(fontsize=14)
         sns.despine()
 
         save_path_auc = self.figures_dir / 'benchmarking' / 'benchmark_immunemirror_AUC.png'
@@ -703,11 +673,7 @@ class HybridEnsemblePipeline:
         plt.close()
         print(f"✓ Figure 1 saved: {save_path_auc}")
 
-        # ======================================================================
-        # FIGURA 2: OPERATING POINT COMPARISON (Archivo separado)
-        # ======================================================================
         plt.figure(figsize=(7, 6))
-
         labels = ['Sensitivity (Recall)', 'Specificity']
         x = np.arange(len(labels))
         width = 0.35
@@ -720,67 +686,51 @@ class HybridEnsemblePipeline:
         rects2 = plt.bar(x + width / 2, my_values, width, label='NeoBridge',
                          color=color_my, edgecolor='black', linewidth=1)
 
-        plt.ylabel('Score', fontsize=16, fontweight='bold')
-        plt.title('Performance at Fixed Specificity (70%)', fontsize=18, fontweight='bold', pad=15)
-
-        # --- AQUÍ QUITAMOS LA NEGRITA DEL EJE X ---
-        plt.xticks(x, labels, fontsize=14, fontweight='normal')
-
-        plt.yticks(fontsize=14)
+        plt.ylabel('Score')
+        plt.title('Performance at Fixed Specificity (70%)', pad=15)
+        plt.xticks(x, labels)
         plt.ylim(0, 1.15)
 
-        plt.legend(frameon=True, fancybox=False, edgecolor='black', loc='upper right', fontsize=12)
+        plt.legend(frameon=True, fancybox=False, edgecolor='black', loc='upper right')
         plt.grid(axis='y', linestyle='--', alpha=0.3)
         sns.despine()
 
-        plt.bar_label(rects1, fmt='%.3f', padding=3, fontsize=12)
-        plt.bar_label(rects2, fmt='%.3f', padding=3, fontsize=12, fontweight='bold')
+        plt.bar_label(rects1, fmt='%.3f', padding=3)
+        plt.bar_label(rects2, fmt='%.3f', padding=3, fontweight='bold')
 
         save_path_op = self.figures_dir / 'benchmarking' / 'benchmark_immunemirror_OperatingPoint.png'
         plt.savefig(save_path_op, dpi=300, bbox_inches='tight')
         plt.close()
         print(f"✓ Figure 2 saved: {save_path_op}")
 
-        # ======================================================================
-        # FIGURA 3: ROC CURVE COMPARISON (NUEVA)
-        # ======================================================================
         fig, ax = plt.subplots(figsize=(8, 6.5))
-
-        # Dibujar la curva ROC de tu modelo
         ax.plot(fpr, tpr, color=color_my, linewidth=3,
                 label=f'NeoBridge (AUC = {my_auc:.3f})')
 
-        # Dibujar el punto operativo de ImmuneMirror
-        im_fpr = 1 - im_metrics['Specificity']  # FPR = 1 - Specificity
-        im_tpr = im_metrics['Sensitivity']  # TPR = Sensitivity
+        im_fpr = 1 - im_metrics['Specificity']
+        im_tpr = im_metrics['Sensitivity']
 
-        # Estrella un poco más grande (s=250) para que destaque bien
         ax.scatter([im_fpr], [im_tpr], color='#d62728', s=250, zorder=5, edgecolors='black', marker='*',
                    label=f"ImmuneMirror Op. Point\n(FPR: {im_fpr:.3f}, TPR: {im_tpr:.3f})")
 
-        # Línea base aleatoria
         ax.plot([0, 1], [0, 1], color='gray', linestyle='--', alpha=0.7)
+        ax.set_xlabel('False Positive Rate (1 - Specificity)')
+        ax.set_ylabel('True Positive Rate (Sensitivity)')
+        ax.set_title('ROC Curve Comparison vs. ImmuneMirror', pad=20)
 
-        ax.set_xlabel('False Positive Rate (1 - Specificity)', fontsize=16, fontweight='bold')
-        ax.set_ylabel('True Positive Rate (Sensitivity)', fontsize=16, fontweight='bold')
-        ax.set_title('ROC Curve Comparison vs. ImmuneMirror', fontsize=18, fontweight='bold', pad=20)
-
-        # --- CAJA DE ESTADÍSTICAS HARDCODEADA CORRECTAMENTE ---
         total_samples = 11188
         pos_pct = 23.0
         stats_text = f"Total Samples: {total_samples} | Positive: {pos_pct:.1f}%"
 
-        # Posicionamiento relativo (1.15) para que no pise el título
         ax.text(0.5, 1.15, stats_text, transform=ax.transAxes,
-                ha='center', va='center', fontsize=14, fontweight='bold',
+                ha='center', va='center', fontweight='bold',
                 bbox=dict(boxstyle='round,pad=0.5', facecolor='#f8f9fa', edgecolor='#cccccc'))
 
-        ax.legend(loc='lower right', frameon=True, edgecolor='black', fontsize=12)
+        ax.legend(loc='lower right', frameon=True, edgecolor='black')
         ax.grid(True, linestyle='--', alpha=0.6)
         sns.despine()
 
         save_path_roc = self.figures_dir / 'benchmarking' / 'benchmark_immunemirror_ROC_Curve.png'
-        # Usamos bbox_inches='tight' para que el guardado respete la caja flotante superior
         plt.savefig(save_path_roc, dpi=300, bbox_inches='tight')
         plt.close()
         print(f"✓ Figure 3 (ROC Curve) saved: {save_path_roc}")
@@ -790,42 +740,32 @@ class HybridEnsemblePipeline:
     # --------------------------------------------------------------------------
 
     def run(self, n_trials_pytorch, n_trials_xgb, n_trials_ensemble, metric, use_cv):
-        # 1. Load Data
         df, X, y = self.load_data()
 
-        # --- NUEVO: Análisis de Correlación ---
         self.plot_feature_correlation(X, self.feature_names)
 
-        # 2. Strict Hold-out Test Set (20%)
-        # Pass full DF to split to keep metadata
         X_dev, X_test, y_dev, y_test, df_dev, df_test = train_test_split(
             X, y, df, test_size=0.20, random_state=42, stratify=y
         )
 
-        # --- CORRECCIÓN DE FUGA DE DATOS (StandardScaler) ---
         print("Scaling features based on Development set statistics...")
         self.scaler = StandardScaler()
-        # 1. Ajustamos (fit) SOLO con los datos de desarrollo
         X_dev = self.scaler.fit_transform(X_dev)
-        # 2. Transformamos el test con las medias/std del desarrollo (sin mirar el test)
         X_test = self.scaler.transform(X_test)
-        # ----------------------------------------------------
 
         print(f"\nData Splits:")
         print(f"  Development (Opt): {X_dev.shape[0]} samples")
         print(f"  Test (Final Eval): {X_test.shape[0]} samples")
 
-        # 3. Hyperparameter Optimization
         best_py_params = self.run_optimization_cv(X_dev, y_dev, 'PyTorch', n_trials_pytorch, metric=metric)
         best_xgb_params = self.run_optimization_cv(X_dev, y_dev, 'XGBoost', n_trials_xgb, metric=metric)
 
-        # 4. Final Model Training (Internal Split for Ensemble Weights)
         X_train_final, X_val_final, y_train_final, y_val_final = train_test_split(
             X_dev, y_dev, test_size=0.1, stratify=y_dev, random_state=42
         )
 
         print("\nTraining final models...")
-        best_py_params['epochs'] = 100;
+        best_py_params['epochs'] = 100
         best_py_params['patience'] = 15
         _, pytorch_model = self.train_pytorch_fold(X_train_final, y_train_final, X_val_final, y_val_final,
                                                    best_py_params)
@@ -835,18 +775,31 @@ class HybridEnsemblePipeline:
         xgb_model = xgb.XGBClassifier(**final_xgb_params, n_estimators=500)
         xgb_model.fit(X_train_final, y_train_final, eval_set=[(X_val_final, y_val_final)], verbose=False)
 
-        # 5. Optimize Weights
         best_weights = self.optimize_weights(pytorch_model, xgb_model, X_val_final, y_val_final, n_trials_ensemble,
                                              metric)
 
         self.plot_ensemble_contribution(best_weights)
 
-        # 6. Final Evaluation
         ensemble = HybridEnsemble(pytorch_model, xgb_model, self.device)
 
-        # --- GENERATE PREDICTIONS FOR VALIDATION AND TEST FOR HEATMAP ---
         probs_val, _, _ = ensemble.ensemble_predict_proba(X_val_final, weights=best_weights)
-        probs_test, _, _ = ensemble.ensemble_predict_proba(X_test, weights=best_weights)
+
+        # --- CHANGE APPLIED HERE ---
+        # Extracting all 3 probabilities from the ensemble for the TEST set
+        probs_test, probs_mlp_test, probs_xgb_test = ensemble.ensemble_predict_proba(X_test, weights=best_weights)
+
+        # --- NEW BLOCK: EXPORT PREDICTIONS FOR DELONG TEST ---
+        print("\nExporting predictions for statistical analysis (DeLong)...")
+        df_preds = pd.DataFrame({
+            'y_true': y_test,
+            'prob_ensemble': probs_test,
+            'prob_mlp': probs_mlp_test,
+            'prob_xgb': probs_xgb_test
+        })
+        delong_path = self.reports_dir / 'performance' / 'test_predictions_for_delong.csv'
+        df_preds.to_csv(delong_path, index=False)
+        print(f"✓ File saved to: {delong_path}")
+        # ------------------------------------------------------------------
 
         self.plot_generalization_heatmap(y_val_final, probs_val, y_test, probs_test)
 
@@ -856,18 +809,14 @@ class HybridEnsemblePipeline:
 
         best_thresh_f2, best_thresh_f1 = self.evaluate_performance(y_test, probs_test, set_name="final_test")
 
-        # Generamos la matriz de confusión utilizando el threshold que optimiza F1
         self.plot_confusion_matrix(y_test, probs_test, threshold=best_thresh_f1, set_name="final_test")
 
         self.analyze_feature_importance(pytorch_model, xgb_model, X_test[:200], best_weights)
 
-        # 7. Analyze Ranking & Export Top 100
         self.analyze_ranking_performance(df_test, y_test, probs_test)
 
-        # 8. BENCHMARKING FIGURE (NEW)
         self.generate_immunemirror_benchmark(y_test, probs_test)
 
-        # 9. Save Models
         print(f"\nSaving models to {self.models_dir}...")
         torch.save(pytorch_model.state_dict(), self.models_dir / 'pytorch_final.pth')
         xgb_model.save_model(self.models_dir / 'xgboost_final.json')
@@ -879,15 +828,12 @@ def main():
     print("NeoBridge ENSEMBLE PIPELINE (GENERAL MODEL - PRODUCTION)")
     print("=" * 60)
 
-    # 1. Configurar Métrica
     metric_in = input("\nSelect metric (1: AUC-ROC, 2: AUC-PR) [Default: 2]: ") or "2"
     metric = "auc_pr" if metric_in == "2" else "auc_roc"
 
-    # 2. Configurar CV
     cv_in = input("Use Cross-Validation? (y/n) [Default: y]: ") or "y"
     use_cv = cv_in.lower() == 'y'
 
-    # 3. Configurar Trials (Optuna)
     print("\n--- OPTUNA TRIALS CONFIGURATION ---")
 
     try:

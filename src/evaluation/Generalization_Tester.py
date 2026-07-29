@@ -18,20 +18,24 @@ import warnings
 warnings.filterwarnings('ignore')
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-# Figure configuration for publication
+# ==============================================================================
+# CONFIGURACIÓN DE FIGURAS PARA PUBLICACIÓN (TAMAÑOS AUMENTADOS)
+# ==============================================================================
 plt.style.use('seaborn-v0_8-whitegrid')
 rcParams.update({
     'font.family': 'sans-serif',
     'font.sans-serif': ['Arial', 'Helvetica', 'DejaVu Sans'],
-    'font.size': 14,
-    'axes.titlesize': 16,
-    'axes.labelsize': 16,
+    'font.size': 16,
+    'axes.titlesize': 20,
+    'axes.labelsize': 18,
     'axes.titleweight': 'bold',
     'axes.labelweight': 'bold',
-    'xtick.labelsize': 14,
-    'ytick.labelsize': 14,
-    'legend.fontsize': 13,
-    'figure.titlesize': 18
+    'axes.labelcolor': 'black',
+    'axes.titlecolor': 'black',
+    'xtick.labelsize': 15,
+    'ytick.labelsize': 15,
+    'legend.fontsize': 10,  # Reducido un poco para que quepan los CIs
+    'figure.titlesize': 22
 })
 
 
@@ -155,6 +159,27 @@ class GeneralizationBenchmark:
             }
         }
 
+    def compute_ci_bootstrap(self, y_true, y_pred, metric_func, n_bootstraps=1000, alpha=0.95):
+        """Calcula intervalos de confianza por Bootstrap para una métrica dada (AUC o AUPRC)."""
+        bootstrapped_scores = []
+        rng = np.random.RandomState(42)  # Semilla fija para reproducibilidad
+
+        for i in range(n_bootstraps):
+            indices = rng.randint(0, len(y_true), len(y_true))
+            if len(np.unique(y_true[indices])) < 2:
+                continue  # Necesitamos ambas clases para calcular las métricas
+            score = metric_func(y_true[indices], y_pred[indices])
+            bootstrapped_scores.append(score)
+
+        if not bootstrapped_scores:
+            return np.nan, np.nan
+
+        sorted_scores = np.array(bootstrapped_scores)
+        sorted_scores.sort()
+        lower_bound = np.percentile(sorted_scores, (1.0 - alpha) / 2.0 * 100)
+        upper_bound = np.percentile(sorted_scores, (1.0 + alpha) / 2.0 * 100)
+        return lower_bound, upper_bound
+
     def load_data(self, config):
         folder = self.data_dir / config['folder']
         train_path = folder / config['train']
@@ -211,7 +236,6 @@ class GeneralizationBenchmark:
 
     def train_final_models(self, X_train, y_train, X_val, y_val, mlp_cfg):
         """Trains final MLP and XGBoost models."""
-        # 1. Train MLP
         model_mlp = ImprovedMLP(X_train.shape[1], mlp_cfg['dims'], 0.3).to(self.device)
         optimizer = optim.Adam(model_mlp.parameters(), lr=mlp_cfg['lr'])
         criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([8.0]).to(self.device))
@@ -226,7 +250,6 @@ class GeneralizationBenchmark:
             loss.backward()
             optimizer.step()
 
-        # 2. Train XGBoost
         model_xgb = xgb.XGBClassifier(
             n_estimators=150, max_depth=6, learning_rate=0.05,
             scale_pos_weight=8.0, eval_metric='logloss', verbosity=0
@@ -236,10 +259,9 @@ class GeneralizationBenchmark:
         return model_mlp, model_xgb
 
     def analyze_loco_homology_leakage(self, df_train, df_test, y_test, test_probs, cancer_title, folder_name):
-        """Calculates sequence homology leakage and plots stratified ROC (Publication Quality)."""
-        print(f"      [~] Auditing Sequence Homology Leakage for {cancer_title}...")
+        """Calculates sequence homology leakage and plots stratified ROC with multiple Hamming distance thresholds."""
+        print(f"      [~] Auditing Sequence Homology Leakage for {cancer_title} (Stringent Thresholds)...")
 
-        # IMPORTANT: Ensure this matches your DataFrame's peptide sequence column
         PEPTIDE_COL = 'Peptide'
 
         # 1. Compute Hamming distances
@@ -251,46 +273,71 @@ class GeneralizationBenchmark:
             lambda p: get_min_hamming_distance(str(p), train_matrices)
         )
 
-        df_test_eval['is_novel'] = df_test_eval['min_hamming'] > 1
-
-        # 2. Stratify outputs
-        novel_mask = df_test_eval['is_novel'] == True
-        leaked_mask = df_test_eval['is_novel'] == False
-
-        y_novel, probs_novel = y_test[novel_mask], test_probs[novel_mask]
-        y_leak, probs_leak = y_test[leaked_mask], test_probs[leaked_mask]
-
-        n_all, n_nov, n_leak = len(y_test), novel_mask.sum(), leaked_mask.sum()
-
-        auc_all = roc_auc_score(y_test, test_probs)
-        auc_nov = roc_auc_score(y_novel, probs_novel) if len(np.unique(y_novel)) > 1 else 0
-        auc_leak = roc_auc_score(y_leak, probs_leak) if n_leak > 0 and len(np.unique(y_leak)) > 1 else 0
-
-        print(f"        -> Strictly Novel: {n_nov} ({(n_nov / n_all) * 100:.1f}%) | AUC: {auc_nov:.3f}")
-
-        # 3. Plotting
+        # 2. Plotting Setup
         plt.style.use('default')
-        sns.set_theme(style="ticks", context="paper", font_scale=1.2)
-        fig, ax = plt.subplots(figsize=(8, 6.5))
+        sns.set_theme(style="ticks", context="paper")
+        fig, ax = plt.subplots(figsize=(10, 8))
+
+        # CÁLCULOS BASELINE ALL
+        auc_all = roc_auc_score(y_test, test_probs)
+        auprc_all = average_precision_score(y_test, test_probs)
+        auc_ci_l_all, auc_ci_u_all = self.compute_ci_bootstrap(y_test, test_probs, roc_auc_score)
+        auprc_ci_l_all, auprc_ci_u_all = self.compute_ci_bootstrap(y_test, test_probs, average_precision_score)
+        n_all = len(y_test)
 
         fpr_all, tpr_all, _ = roc_curve(y_test, test_probs)
-        ax.plot(fpr_all, tpr_all, color='#555555', linestyle=':', linewidth=2.5, zorder=2,
-                label=f'All Peptides\nAUC = {auc_all:.3f} (n={n_all})')
+        label_all = (f'All Peptides (n={n_all})\n'
+                     f'AUC: {auc_all:.3f} [{auc_ci_l_all:.3f}-{auc_ci_u_all:.3f}]\n'
+                     f'AUPRC: {auprc_all:.3f} [{auprc_ci_l_all:.3f}-{auprc_ci_u_all:.3f}]')
 
-        if auc_nov > 0:
-            fpr_nov, tpr_nov, _ = roc_curve(y_novel, probs_novel)
-            ax.plot(fpr_nov, tpr_nov, color='#084594', linestyle='-', linewidth=3, zorder=4,
-                    label=f'Strictly Novel (Hamming > 1)\nAUC = {auc_nov:.3f} (n={n_nov})')
+        ax.plot(fpr_all, tpr_all, color='#555555', linestyle=':', linewidth=3, zorder=2, label=label_all)
 
-        if auc_leak > 0:
-            fpr_leak, tpr_leak, _ = roc_curve(y_leak, probs_leak)
-            ax.plot(fpr_leak, tpr_leak, color='#cb181d', linestyle='--', linewidth=2, alpha=0.8, zorder=3,
-                    label=f'Homologous (Hamming <= 1)\nAUC = {auc_leak:.3f} (n={n_leak})')
+        # 3. Iterative calculation for multiple thresholds
+        thresholds = [1, 2, 3, 4]
+        colors = ['#084594', '#2171b5', '#4292c6', '#6baed6']
+
+        stratification_metrics = []
+
+        for thr, color in zip(thresholds, colors):
+            mask = df_test_eval['min_hamming'] > thr
+            y_nov = y_test[mask]
+            probs_nov = test_probs[mask]
+            n_nov = mask.sum()
+
+            if n_nov > 0 and len(np.unique(y_nov)) > 1:
+                # CÁLCULO DE MÉTRICAS E INTERVALOS (NUEVO)
+                auc_nov = roc_auc_score(y_nov, probs_nov)
+                auprc_nov = average_precision_score(y_nov, probs_nov)
+
+                auc_ci_l, auc_ci_u = self.compute_ci_bootstrap(y_nov, probs_nov, roc_auc_score)
+                auprc_ci_l, auprc_ci_u = self.compute_ci_bootstrap(y_nov, probs_nov, average_precision_score)
+
+                fpr_nov, tpr_nov, _ = roc_curve(y_nov, probs_nov)
+
+                label_nov = (f'Novel HD > {thr} (n={n_nov})\n'
+                             f'AUC: {auc_nov:.3f} [{auc_ci_l:.3f}-{auc_ci_u:.3f}]\n'
+                             f'AUPRC: {auprc_nov:.3f} [{auprc_ci_l:.3f}-{auprc_ci_u:.3f}]')
+
+                ax.plot(fpr_nov, tpr_nov, color=color, linestyle='-', linewidth=2.5, zorder=4, label=label_nov)
+
+                print(f"        -> HD > {thr}: {n_nov} samples | AUC: {auc_nov:.3f} | AUPRC: {auprc_nov:.3f}")
+
+                stratification_metrics.append({
+                    'Cancer': cancer_title,
+                    'Threshold': f'HD > {thr}',
+                    'N': n_nov,
+                    'AUC': f"{auc_nov:.4f}",
+                    'AUC_95_CI': f"[{auc_ci_l:.4f} - {auc_ci_u:.4f}]",
+                    'AUPRC': f"{auprc_nov:.4f}",
+                    'AUPRC_95_CI': f"[{auprc_ci_l:.4f} - {auprc_ci_u:.4f}]"
+                })
 
         ax.plot([0, 1], [0, 1], color='black', linestyle='--', linewidth=1, alpha=0.5, zorder=1)
-        ax.set_xlabel('False Positive Rate', fontweight='bold')
-        ax.set_ylabel('True Positive Rate', fontweight='bold')
-        ax.set_title(f'{cancer_title} Hold-Out: Sequence Novelty Stratification', fontweight='bold', pad=15)
+
+        ax.set_xlabel('False Positive Rate', fontweight='bold', fontsize=18, color='black')
+        ax.set_ylabel('True Positive Rate', fontweight='bold', fontsize=18, color='black')
+        ax.set_title(f'{cancer_title} Hold-Out: Sequence Novelty Stratification', fontweight='bold', pad=20,
+                     fontsize=20, color='black')
         ax.grid(True, linestyle='-', alpha=0.15, color='gray')
 
         legend = ax.legend(loc='lower right', fontsize=11, frameon=True, edgecolor='black', framealpha=0.9)
@@ -302,6 +349,8 @@ class GeneralizationBenchmark:
         plt.savefig(out_path, dpi=300, bbox_inches='tight')
         plt.close()
 
+        return stratification_metrics
+
     def plot_size_matched_analysis(self, full_data_metrics, size_matched_metrics):
         """Generates out-of-sample AUPRC distribution with matched N sizes."""
         print("\n[INFO] Generating Size-Matched Sensitivity visualization...")
@@ -310,7 +359,8 @@ class GeneralizationBenchmark:
         df_fd = pd.DataFrame(full_data_metrics)
 
         fig, ax = plt.subplots(figsize=(10, 6))
-        fig.suptitle('Size-Matched Sensitivity Analysis (Cancer Hold-Out)', y=1.05, fontweight='bold', fontsize=18)
+        fig.suptitle('Size-Matched Sensitivity Analysis (Cancer Hold-Out)', y=1.05, fontweight='bold', fontsize=22,
+                     color='black')
 
         category_order = df_fd['Cancer_Holdout'].unique()
 
@@ -325,79 +375,20 @@ class GeneralizationBenchmark:
                     label='Full Data Baseline' if i == 0 else "")
             ax.hlines(val, i - 0.4, i + 0.4, colors='red', linestyles='dashed', alpha=0.6)
 
-        ax.set_title('Out-of-Sample AUPRC: Full Data vs N-Matched', pad=15)
-        ax.set_ylabel('AUPRC Score', fontweight='bold')
-        ax.set_xlabel('Held-out Cancer Type', fontweight='bold', labelpad=15)
+        ax.set_title('Out-of-Sample AUPRC: Full Data vs N-Matched', pad=15, fontsize=20, color='black')
+        ax.set_ylabel('AUPRC Score', fontweight='bold', fontsize=18, color='black')
+        ax.set_xlabel('Held-out Cancer Type', fontweight='bold', labelpad=15, fontsize=18, color='black')
 
-        plt.xticks(rotation=30, ha='right', fontsize=13)
+        plt.xticks(rotation=30, ha='right', fontsize=15)
+        plt.yticks(fontsize=15)
 
         handles, labels = ax.get_legend_handles_labels()
         by_label = dict(zip(labels, handles))
-        ax.legend(by_label.values(), by_label.keys(), loc='best', frameon=True, edgecolor='black')
+        ax.legend(by_label.values(), by_label.keys(), loc='best', frameon=True, edgecolor='black', fontsize=14)
 
         plt.tight_layout()
         save_path = self.base_figs_dir / 'Cancer_Size_Matched_Analysis.png'
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.close()
-
-    def save_plots(self, val_y, val_probs, test_y, test_probs, output_dir, cancer_title):
-        """Generates ROC and Confusion Matrix for general hold-out evaluations."""
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # 1. ROC Curve Comparison
-        fig, ax = plt.subplots(figsize=(8, 6.5))
-
-        fpr_v, tpr_v, _ = roc_curve(val_y, val_probs)
-        auc_v = roc_auc_score(val_y, val_probs)
-
-        fpr_t, tpr_t, _ = roc_curve(test_y, test_probs)
-        auc_t = roc_auc_score(test_y, test_probs)
-
-        ax.plot(fpr_v, tpr_v, linestyle='--', color='#1f77b4', linewidth=2,
-                label=f'Validation (Known Cancers) AUC={auc_v:.2f}')
-        ax.plot(fpr_t, tpr_t, linestyle='-', color='#d62728', linewidth=3,
-                label=f'Generalization ({cancer_title}) AUC={auc_t:.2f}')
-        ax.plot([0, 1], [0, 1], color='grey', linestyle='--', alpha=0.7)
-
-        ax.set_xlabel('False Positive Rate')
-        ax.set_ylabel('True Positive Rate')
-        ax.set_title(f'ROC Curve: Generalization to {cancer_title}', pad=20)
-
-        total_samples = len(test_y)
-        pos_pct = (sum(test_y) / total_samples) * 100
-        stats_text = f"Total Samples: {total_samples} | Positive: {pos_pct:.1f}%"
-
-        ax.text(0.5, 1.15, stats_text, transform=ax.transAxes,
-                ha='center', va='center', fontsize=14, fontweight='bold',
-                bbox=dict(boxstyle='round,pad=0.5', facecolor='#f8f9fa', edgecolor='#cccccc'))
-
-        ax.legend(loc='lower right', frameon=True, edgecolor='black')
-        ax.grid(True, linestyle='--', alpha=0.6)
-        sns.despine()
-
-        plt.savefig(output_dir / 'roc_curve.png', dpi=300, bbox_inches='tight')
-        plt.close()
-
-        # 2. Confusion Matrix
-        prec, rec, thresholds = precision_recall_curve(test_y, test_probs)
-        f1_scores = 2 * (prec * rec) / (prec + rec + 1e-8)
-        best_thresh = thresholds[np.argmax(f1_scores)]
-        preds = (test_probs >= best_thresh).astype(int)
-
-        cm = confusion_matrix(test_y, preds)
-
-        plt.figure(figsize=(6, 5))
-        ax = sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', annot_kws={"size": 14})
-
-        ax.set_xlabel('Predicted', fontsize=14, labelpad=10)
-        ax.set_ylabel('True', fontsize=14, labelpad=10)
-        ax.set_xticklabels(['0', '1'], fontsize=12)
-        ax.set_yticklabels(['0', '1'], fontsize=12, rotation=0)
-
-        plt.title(f'Confusion Matrix ({cancer_title})\nThresh: {best_thresh:.3f}', fontsize=16, pad=15)
-
-        plt.tight_layout()
-        plt.savefig(output_dir / 'confusion_matrix.png', dpi=300, bbox_inches='tight')
         plt.close()
 
     def run_all(self):
@@ -407,6 +398,7 @@ class GeneralizationBenchmark:
 
         summary_full_data = []
         summary_size_matched = []
+        all_hamming_metrics = []  # Para recolectar las métricas de Hamming
 
         # 1. Determine N limit for Size-Matching
         min_train_size = float('inf')
@@ -456,8 +448,10 @@ class GeneralizationBenchmark:
             print(f"        -> AUPRC Full Data: {ap_full:.4f}")
 
             # Execute Homology Leakage Audit and generate Stratified ROC plot
-            self.analyze_loco_homology_leakage(df_train_full, df_test, y_test, test_probs_full, config['title'],
-                                               config['folder'])
+            hamming_metrics = self.analyze_loco_homology_leakage(df_train_full, df_test, y_test, test_probs_full,
+                                                                 config['title'],
+                                                                 config['folder'])
+            all_hamming_metrics.extend(hamming_metrics)
 
             summary_full_data.append({
                 'Cancer_Holdout': config['title'],
@@ -510,6 +504,14 @@ class GeneralizationBenchmark:
 
         self.base_reports_dir.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(summary_size_matched).to_csv(self.base_reports_dir / 'cancer_size_matched.csv', index=False)
+
+        # GUARDAR MÉTRICAS DE HAMMING PARA REBUTTAL
+        if all_hamming_metrics:
+            df_hamming = pd.DataFrame(all_hamming_metrics)
+            csv_path = self.base_reports_dir / 'hamming_stratification_metrics_rebuttal.csv'
+            df_hamming.to_csv(csv_path, index=False)
+            print(f"\n[!] CSV con Métricas (AUC/AUPRC + CI) para Rebuttal exportado a:\n    {csv_path}")
+
         print("\n[INFO] Size-Matched Cancer Benchmark Completed")
 
 

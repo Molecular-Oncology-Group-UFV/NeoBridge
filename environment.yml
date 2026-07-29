@@ -430,3 +430,4 @@ dependencies:
       - torch==2.9.1+cu126
       - torchvision==0.24.1+cu126
       - triton==3.5.1
+      - MLstatkit==0.1.91

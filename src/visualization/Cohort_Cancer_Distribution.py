@@ -12,7 +12,7 @@ class CohortVisualizer:
     def __init__(self):
         # Path configuration
         self.project_root = Path(__file__).resolve().parent.parent.parent
-        self.data_path = self.project_root / 'data' / 'raw' / 'NeoPepBase.csv'
+        self.data_path = self.project_root / 'data' / 'raw' / 'dataset_80_20_normalized_tcr_with_cohort.csv'
 
         self.output_dir = self.project_root / 'results' / 'figures' / 'cancer_cohort_figures'
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -25,25 +25,24 @@ class CohortVisualizer:
     def _setup_style(self):
         """Sets up matplotlib style for scientific publication."""
         plt.style.use('seaborn-v0_8-ticks')
-        # Fuentes preferidas en publicaciones científicas
         rcParams['font.family'] = 'sans-serif'
         rcParams['font.sans-serif'] = ['Arial', 'Helvetica', 'DejaVu Sans']
 
-        # Tamaños base ampliados
-        rcParams['font.size'] = 14
-        rcParams['axes.titlesize'] = 16
-        rcParams['axes.labelsize'] = 16
+        # Tamaños base MUY ampliados para máxima legibilidad
+        rcParams['font.size'] = 18             # Base general
+        rcParams['axes.titlesize'] = 22        # Títulos de cada gráfico
+        rcParams['axes.labelsize'] = 20        # Nombres de los ejes X e Y
         rcParams['axes.titleweight'] = 'bold'
-        rcParams['axes.labelweight'] = 'bold' # Añadido para que los labels de los ejes sean bold por defecto
-        rcParams['xtick.labelsize'] = 14
-        rcParams['ytick.labelsize'] = 14
-        rcParams['legend.fontsize'] = 12
-        rcParams['legend.title_fontsize'] = 14 # Añadido para el título de las leyendas
-        rcParams['figure.titlesize'] = 18
+        rcParams['axes.labelweight'] = 'bold'
+        rcParams['xtick.labelsize'] = 16       # Números y etiquetas del eje X
+        rcParams['ytick.labelsize'] = 16       # Números y etiquetas del eje Y
+        rcParams['legend.fontsize'] = 16       # Textos de la leyenda
+        rcParams['legend.title_fontsize'] = 18 # Título de la leyenda
+        rcParams['figure.titlesize'] = 24      # Título general
 
-        # Espaciados por defecto (para evitar hardcodear labelpad y pad)
-        rcParams['axes.labelpad'] = 10
-        rcParams['axes.titlepad'] = 15
+        # Espaciados ampliados para que los textos grandes no choquen
+        rcParams['axes.labelpad'] = 15
+        rcParams['axes.titlepad'] = 20
 
         # Configuración para exportación de alta calidad
         rcParams['figure.facecolor'] = 'white'
@@ -58,6 +57,9 @@ class CohortVisualizer:
 
         print(f"Loading data from: {self.data_path}")
         df = pd.read_csv(self.data_path)
+
+        print("Total de filas leídas:", len(df))
+        print("Valores nulos por columna:\n", df.isnull().sum())
 
         # Cohort cleaning: Replace NaN/Empty/Unknown with CEDAR
         df['cohort_clean'] = df['cohort'].fillna('CEDAR')

@@ -20,14 +20,14 @@ plt.style.use('seaborn-v0_8-whitegrid')
 rcParams.update({
     'font.family': 'sans-serif',
     'font.sans-serif': ['Arial', 'Helvetica', 'DejaVu Sans'],
-    'font.size': 12,
-    'axes.titlesize': 16,
-    'axes.labelsize': 14,
+    'font.size': 14,              # Aumentado de 12 a 14
+    'axes.titlesize': 18,         # Aumentado de 16 a 18
+    'axes.labelsize': 16,         # Aumentado de 14 a 16
     'axes.labelweight': 'bold',
     'axes.titleweight': 'bold',
-    'xtick.labelsize': 12,
-    'ytick.labelsize': 12,
-    'legend.fontsize': 12,
+    'xtick.labelsize': 14,        # Aumentado de 12 a 14
+    'ytick.labelsize': 14,        # Aumentado de 12 a 14
+    'legend.fontsize': 14,        # Aumentado de 12 a 14
     'figure.dpi': 300,
     'savefig.dpi': 300,
     'savefig.bbox': 'tight'
