@@ -66,5 +66,5 @@ Trained model weights, fitted scalers, and configuration files are provided unde
 If you use NeoBridge in your research, please cite:
 Mediavilla A, Cardoso J, Álvarez-Benayas J and Sanchez-Arevalo Lobo, Victor Javier
 NeoBridge: Biophysics-informed neoantigen prioritization and clonal architecture profiling in pancreatic cancer
-Cell Genomics, 2026; 0
+Cell Genomics, 2026; 0 DOI: 10.1016/j.xgen.2026.101397 
 
